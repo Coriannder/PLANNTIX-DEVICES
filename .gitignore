@@ -1,0 +1,19 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+
+# Arduino IDE
+build/
+bin/
+
+# IDEs
+.vscode/ipch/
+.vscode/.browse.vc.db
+.vscode/browse.vc.db
+
+# OS files
+.DS_Store
+Thumbs.db
