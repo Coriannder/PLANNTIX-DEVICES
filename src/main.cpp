@@ -374,12 +374,20 @@ void loop() {
           }
         }
         
+        static bool lastRelayState = !targetRelayState;
+        
         digitalWrite(RELAY_PIN, targetRelayState ? HIGH : LOW);
-        Serial.printf("Relé (Modo: %s) -> %s\n", lightMode.c_str(), targetRelayState ? "ENCENDIDO" : "APAGADO");
+        
+        if (targetRelayState != lastRelayState) {
+          lastRelayState = targetRelayState;
+          Firebase.RTDB.setBool(&fbData, "/telemetry/" + deviceMac + "/latest/isLightOn", targetRelayState);
+          Serial.printf("=> Cambio detectado! Notificando a Web: Relé -> %s\n", targetRelayState ? "ON" : "OFF");
+        }
 
         // Subida de datos de telemetría
         FirebaseJson json;
         json.add("temperature", avgTemp);
+        json.add("isLightOn", targetRelayState);
         json.add("humidity", avgHum);
         json.add("timestamp", (int)time(nullptr));
         // NOTA: No enviamos el deviceToken en texto plano aquí para no exponerlo en reposo.
