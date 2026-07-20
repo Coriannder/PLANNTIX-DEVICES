@@ -142,11 +142,22 @@ void setup() {
   Serial.print("Sincronizando hora con internet (NTP)...");
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   time_t now = time(nullptr);
-  while (now < 8 * 3600 * 2) {
+  int ntpTimeout = 0;
+  while (now < 8 * 3600 * 2 && ntpTimeout < 60) { // 60 iteraciones x 500ms = 30 segundos
     delay(500);
     Serial.print(".");
     now = time(nullptr);
+    ntpTimeout++;
   }
+  
+  if (now < 8 * 3600 * 2) {
+    Serial.println("\n[ERROR CRÍTICO] Timeout NTP (30s). No se pudo sincronizar la hora.");
+    Serial.println("Posible bloqueo del puerto 123 (NTP) en la red local o requiere portal cautivo de hotel/red pública.");
+    Serial.println("Reiniciando placa para reintentar en 3 segundos...");
+    delay(3000);
+    ESP.restart();
+  }
+
   Serial.println("\nHora sincronizada exitosamente.");
 
   // 2. Inicializar Firebase
