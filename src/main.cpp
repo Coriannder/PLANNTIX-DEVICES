@@ -34,6 +34,10 @@ unsigned long lastHistoryUploadTime = 0;
 unsigned long buttonPressStartTime = 0;
 bool isButtonPressed = false;
 volatile bool forceConfigUpdate = true;
+bool isOverrideActive = false;
+unsigned long overrideStartTime = 0;
+bool overrideRelayState = false;
+
 
 // Schedule Settings
 bool lightIsOn = false;         
@@ -321,17 +325,31 @@ void loop() {
         bool changed = false;
         
         json.get(jsonData, "lightMode");
-        if(jsonData.success && lightMode != jsonData.stringValue) { lightMode = jsonData.stringValue; changed = true; }
+        if(jsonData.success && lightMode != jsonData.stringValue) { 
+          lightMode = jsonData.stringValue; 
+          changed = true; 
+          isOverrideActive = false; // Reset override on mode change
+        }
         
-        json.get(jsonData, "isOn");
-        if(jsonData.success && lightIsOn != jsonData.boolValue) { lightIsOn = jsonData.boolValue; }
+        // Pre-evaluate scheduled state
+        bool scheduledState = false;
+        time_t now = time(nullptr);
+        struct tm* timeinfo = localtime(&now);
+        int currentTotalMins = timeinfo->tm_hour * 60 + timeinfo->tm_min;
+        int onTotalMins = lightOnHour * 60 + lightOnMin;
+        int offTotalMins = lightOffHour * 60 + lightOffMin;
 
         json.get(jsonData, "onTime");
         if(jsonData.success) {
           String onT = jsonData.stringValue;
           int h = onT.substring(0, 2).toInt();
           int m = onT.substring(3, 5).toInt();
-          if (lightOnHour != h || lightOnMin != m) { lightOnHour = h; lightOnMin = m; changed = true; }
+          if (lightOnHour != h || lightOnMin != m) { 
+            lightOnHour = h; 
+            lightOnMin = m; 
+            changed = true; 
+            isOverrideActive = false; // Reset override on schedule change
+          }
         }
 
         json.get(jsonData, "offTime");
@@ -339,7 +357,42 @@ void loop() {
           String offT = jsonData.stringValue;
           int h = offT.substring(0, 2).toInt();
           int m = offT.substring(3, 5).toInt();
-          if (lightOffHour != h || lightOffMin != m) { lightOffHour = h; lightOffMin = m; changed = true; }
+          if (lightOffHour != h || lightOffMin != m) { 
+            lightOffHour = h; 
+            lightOffMin = m; 
+            changed = true; 
+            isOverrideActive = false; // Reset override on schedule change
+          }
+        }
+
+        if (lightMode == "auto") {
+          onTotalMins = lightOnHour * 60 + lightOnMin;
+          offTotalMins = lightOffHour * 60 + lightOffMin;
+          if (onTotalMins < offTotalMins) {
+            scheduledState = (currentTotalMins >= onTotalMins && currentTotalMins < offTotalMins);
+          } else {
+            scheduledState = (currentTotalMins >= onTotalMins || currentTotalMins < offTotalMins);
+          }
+        }
+
+        json.get(jsonData, "isOn");
+        if(jsonData.success) {
+          bool newIsOn = jsonData.boolValue;
+          if (lightIsOn != newIsOn) {
+            lightIsOn = newIsOn;
+            
+            if (lightMode == "auto") {
+              // If user toggled switch and it differs from schedule, activate override
+              if (newIsOn != scheduledState) {
+                isOverrideActive = true;
+                overrideStartTime = millis();
+                overrideRelayState = newIsOn;
+                Serial.printf("=> Override manual activado por 5 minutos: Relé -> %s\n", newIsOn ? "ON" : "OFF");
+              } else {
+                isOverrideActive = false;
+              }
+            }
+          }
         }
         
         if (changed) saveScheduleToEEPROM();
@@ -357,10 +410,27 @@ void loop() {
       int onTotalMins = lightOnHour * 60 + lightOnMin;
       int offTotalMins = lightOffHour * 60 + lightOffMin;
       
+      bool scheduledState = false;
       if (onTotalMins < offTotalMins) {
-        targetRelayState = (currentTotalMins >= onTotalMins && currentTotalMins < offTotalMins);
+        scheduledState = (currentTotalMins >= onTotalMins && currentTotalMins < offTotalMins);
       } else {
-        targetRelayState = (currentTotalMins >= onTotalMins || currentTotalMins < offTotalMins);
+        scheduledState = (currentTotalMins >= onTotalMins || currentTotalMins < offTotalMins);
+      }
+
+      if (isOverrideActive) {
+        // 5 minutos = 300000 ms. Para pruebas podés cambiarlo a 30000 ms (30 seg)
+        if (millis() - overrideStartTime > 300000) {
+          isOverrideActive = false;
+          targetRelayState = scheduledState;
+          lightIsOn = scheduledState;
+          // Actualizar Firebase para sincronizar la web
+          Firebase.RTDB.setBool(&fbData, "/telemetry/" + deviceMac + "/config/light/isOn", scheduledState);
+          Serial.println("=> Override manual expirado (5m). Restableciendo ciclo automático.");
+        } else {
+          targetRelayState = overrideRelayState;
+        }
+      } else {
+        targetRelayState = scheduledState;
       }
     }
     
