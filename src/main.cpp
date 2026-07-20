@@ -38,8 +38,10 @@ float sumTemp = 0;
 float sumHum = 0;
 int readCount = 0;
 
+const int MAX_TOKEN_LEN = 64;
+
 void saveTokenToEEPROM(String token) {
-  for (int i = 0; i < 32; ++i) {
+  for (int i = 0; i < MAX_TOKEN_LEN; ++i) {
     if (i < (int)token.length()) {
       EEPROM.write(i, token[i]);
     } else {
@@ -52,7 +54,7 @@ void saveTokenToEEPROM(String token) {
 
 String loadTokenFromEEPROM() {
   String token = "";
-  for (int i = 0; i < 32; ++i) {
+  for (int i = 0; i < MAX_TOKEN_LEN; ++i) {
     char c = EEPROM.read(i);
     if (c == 0 || c == 255) break; // Si está vacío o borrado
     token += c;
@@ -228,13 +230,21 @@ void loop() {
       if (Firebase.RTDB.getString(&fbData, tokenPath)) {
         receivedToken = fbData.stringData();
         if (receivedToken.length() > 5) {
-          deviceToken = receivedToken;
-          saveTokenToEEPROM(deviceToken);
-          isLinked = true;
-          Serial.println("¡Dispositivo vinculado con éxito y token asegurado!");
-          // Limpiar huérfano
-          if (pairingPin.length() == 6) {
-            Firebase.RTDB.deleteNode(&fbData, "/unlinked_devices/" + pairingPin);
+          if (receivedToken.length() >= MAX_TOKEN_LEN) {
+            Serial.println("\n[ERROR CRÍTICO] Token recibido excede capacidad de EEPROM (Máx 63 bytes).");
+            Serial.println("Rechazando credencial corrompida y borrando nodo de Firebase...");
+            Firebase.RTDB.deleteNode(&fbData, tokenPath);
+            delay(3000);
+            ESP.restart();
+          } else {
+            deviceToken = receivedToken;
+            saveTokenToEEPROM(deviceToken);
+            isLinked = true;
+            Serial.println("¡Dispositivo vinculado con éxito y token asegurado!");
+            // Limpiar huérfano
+            if (pairingPin.length() == 6) {
+              Firebase.RTDB.deleteNode(&fbData, "/unlinked_devices/" + pairingPin);
+            }
           }
         }
       }
