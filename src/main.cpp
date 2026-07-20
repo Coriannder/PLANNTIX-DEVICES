@@ -296,6 +296,7 @@ void loop() {
         FirebaseJson json;
         json.add("temperature", avgTemp);
         json.add("humidity", avgHum);
+        json.add("timestamp", (int)time(nullptr));
         // NOTA: No enviamos el deviceToken en texto plano aquí para no exponerlo en reposo.
         
         String path = "/telemetry/" + deviceMac + "/latest";
