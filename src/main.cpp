@@ -19,6 +19,7 @@ DHT dht(DHTPIN, DHTTYPE);
 #define FIREBASE_HOST "plantix-9c6a4-default-rtdb.firebaseio.com"
 
 FirebaseData fbData;
+FirebaseData streamData;
 FirebaseConfig fbConfig;
 FirebaseAuth fbAuth;
 
@@ -31,6 +32,7 @@ String deviceToken = "";
 unsigned long lastSensorReadTime = 0;
 unsigned long buttonPressStartTime = 0;
 bool isButtonPressed = false;
+volatile bool forceConfigUpdate = true;
 
 // Schedule Settings
 bool lightIsOn = false;         
@@ -96,6 +98,14 @@ void loadScheduleFromEEPROM() {
   
   Serial.printf("Horarios cargados de EEPROM: Modo=%s, ON=%02d:%02d, OFF=%02d:%02d\n", 
                 lightMode.c_str(), lightOnHour, lightOnMin, lightOffHour, lightOffMin);
+}
+
+void streamCallback(FirebaseStream data) {
+  forceConfigUpdate = true;
+}
+
+void streamTimeoutCallback(bool timeout) {
+  if (timeout) Serial.println("Stream timeout, reconectando...");
 }
 
 void factoryReset() {
@@ -225,6 +235,15 @@ void setup() {
   if (!Firebase.RTDB.setString(&fbData, presencePath, "online")) {
     Serial.printf("Error de Firebase (Status): %s\n", fbData.errorReason().c_str());
   }
+
+  if (isLinked) {
+    if (Firebase.RTDB.beginStream(&streamData, "/telemetry/" + deviceMac + "/config/light")) {
+      Serial.println("Stream configurado exitosamente!");
+      Firebase.RTDB.setStreamCallback(&streamData, streamCallback, streamTimeoutCallback);
+    } else {
+      Serial.printf("Error al iniciar stream: %s\n", streamData.errorReason().c_str());
+    }
+  }
 }
 
 void loop() {
@@ -289,6 +308,69 @@ void loop() {
       }
     }
   } else {
+    // ---- ACTUALIZACIÓN INSTANTÁNEA POR STREAM ----
+    if (forceConfigUpdate) {
+      forceConfigUpdate = false;
+      String configPath = "/telemetry/" + deviceMac + "/config/light";
+      if (Firebase.RTDB.getJSON(&fbData, configPath)) {
+        FirebaseJsonData jsonData;
+        FirebaseJson &json = fbData.jsonObject();
+        
+        bool changed = false;
+        
+        json.get(jsonData, "lightMode");
+        if(jsonData.success && lightMode != jsonData.stringValue) { lightMode = jsonData.stringValue; changed = true; }
+        
+        json.get(jsonData, "isOn");
+        if(jsonData.success && lightIsOn != jsonData.boolValue) { lightIsOn = jsonData.boolValue; }
+
+        json.get(jsonData, "onTime");
+        if(jsonData.success) {
+          String onT = jsonData.stringValue;
+          int h = onT.substring(0, 2).toInt();
+          int m = onT.substring(3, 5).toInt();
+          if (lightOnHour != h || lightOnMin != m) { lightOnHour = h; lightOnMin = m; changed = true; }
+        }
+
+        json.get(jsonData, "offTime");
+        if(jsonData.success) {
+          String offT = jsonData.stringValue;
+          int h = offT.substring(0, 2).toInt();
+          int m = offT.substring(3, 5).toInt();
+          if (lightOffHour != h || lightOffMin != m) { lightOffHour = h; lightOffMin = m; changed = true; }
+        }
+        
+        if (changed) saveScheduleToEEPROM();
+      }
+    }
+
+    // ---- EVALUACIÓN CONTINUA DEL RELÉ ----
+    bool targetRelayState = false;
+    if (lightMode == "manual") {
+      targetRelayState = lightIsOn;
+    } else {
+      time_t now = time(nullptr);
+      struct tm* timeinfo = localtime(&now);
+      int currentTotalMins = timeinfo->tm_hour * 60 + timeinfo->tm_min;
+      int onTotalMins = lightOnHour * 60 + lightOnMin;
+      int offTotalMins = lightOffHour * 60 + lightOffMin;
+      
+      if (onTotalMins < offTotalMins) {
+        targetRelayState = (currentTotalMins >= onTotalMins && currentTotalMins < offTotalMins);
+      } else {
+        targetRelayState = (currentTotalMins >= onTotalMins || currentTotalMins < offTotalMins);
+      }
+    }
+    
+    static bool lastRelayState = !targetRelayState;
+    digitalWrite(RELAY_PIN, targetRelayState ? HIGH : LOW);
+    
+    if (targetRelayState != lastRelayState) {
+      lastRelayState = targetRelayState;
+      Firebase.RTDB.setBool(&fbData, "/telemetry/" + deviceMac + "/latest/isLightOn", targetRelayState);
+      Serial.printf("=> Cambio detectado! Notificando a Web: Relé -> %s\n", targetRelayState ? "ON" : "OFF");
+    }
+
     // DISPOSITIVO VINCULADO: LEER SENSORES Y ACTUADORES (cada 10s)
     if (currentMillis - lastSensorReadTime > 10000) {
       lastSensorReadTime = currentMillis;
@@ -322,67 +404,6 @@ void loop() {
         readCount = 0;
 
         Serial.printf("Promedio 30s -> Humedad: %.1f%%  |  Temperatura: %.1f°C\n", avgHum, avgTemp);
-
-        // Control de Actuadores y Lectura de Configuración de Firebase
-        String configPath = "/telemetry/" + deviceMac + "/config/light";
-        if (Firebase.RTDB.getJSON(&fbData, configPath)) {
-          FirebaseJsonData jsonData;
-          FirebaseJson &json = fbData.jsonObject();
-          
-          bool changed = false;
-          
-          json.get(jsonData, "lightMode");
-          if(jsonData.success && lightMode != jsonData.stringValue) { lightMode = jsonData.stringValue; changed = true; }
-          
-          json.get(jsonData, "isOn");
-          if(jsonData.success && lightIsOn != jsonData.boolValue) { lightIsOn = jsonData.boolValue; } // No guardamos 'isOn' en EEPROM, solo el modo y horario.
-
-          json.get(jsonData, "onTime");
-          if(jsonData.success) {
-            String onT = jsonData.stringValue;
-            int h = onT.substring(0, 2).toInt();
-            int m = onT.substring(3, 5).toInt();
-            if (lightOnHour != h || lightOnMin != m) { lightOnHour = h; lightOnMin = m; changed = true; }
-          }
-
-          json.get(jsonData, "offTime");
-          if(jsonData.success) {
-            String offT = jsonData.stringValue;
-            int h = offT.substring(0, 2).toInt();
-            int m = offT.substring(3, 5).toInt();
-            if (lightOffHour != h || lightOffMin != m) { lightOffHour = h; lightOffMin = m; changed = true; }
-          }
-          
-          if (changed) saveScheduleToEEPROM();
-        }
-
-        // Evaluar Horario (Reloj Interno)
-        bool targetRelayState = false;
-        if (lightMode == "manual") {
-          targetRelayState = lightIsOn;
-        } else {
-          time_t now = time(nullptr);
-          struct tm* timeinfo = localtime(&now);
-          int currentTotalMins = timeinfo->tm_hour * 60 + timeinfo->tm_min;
-          int onTotalMins = lightOnHour * 60 + lightOnMin;
-          int offTotalMins = lightOffHour * 60 + lightOffMin;
-          
-          if (onTotalMins < offTotalMins) {
-            targetRelayState = (currentTotalMins >= onTotalMins && currentTotalMins < offTotalMins);
-          } else {
-            targetRelayState = (currentTotalMins >= onTotalMins || currentTotalMins < offTotalMins);
-          }
-        }
-        
-        static bool lastRelayState = !targetRelayState;
-        
-        digitalWrite(RELAY_PIN, targetRelayState ? HIGH : LOW);
-        
-        if (targetRelayState != lastRelayState) {
-          lastRelayState = targetRelayState;
-          Firebase.RTDB.setBool(&fbData, "/telemetry/" + deviceMac + "/latest/isLightOn", targetRelayState);
-          Serial.printf("=> Cambio detectado! Notificando a Web: Relé -> %s\n", targetRelayState ? "ON" : "OFF");
-        }
 
         // Subida de datos de telemetría
         FirebaseJson json;
