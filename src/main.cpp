@@ -282,11 +282,11 @@ void loop() {
            Serial.printf("Relé actualizado a: %s\n", relayState ? "ENCENDIDO" : "APAGADO");
         }
 
-        // Subida de datos segura
+        // Subida de datos de telemetría
         FirebaseJson json;
         json.add("temperature", avgTemp);
         json.add("humidity", avgHum);
-        json.add("token", deviceToken); // ¡Firma el paquete con el token secreto!
+        // NOTA: No enviamos el deviceToken en texto plano aquí para no exponerlo en reposo.
         
         String path = "/telemetry/" + deviceMac + "/latest";
         if (Firebase.RTDB.setJSON(&fbData, path, &json)) {
