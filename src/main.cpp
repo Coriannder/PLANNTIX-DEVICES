@@ -131,11 +131,22 @@ void setup() {
   Serial.println("\n¡Wi-Fi Conectado exitosamente!");
 
   String providedPin = custom_pin.getValue();
-  if (!isLinked && providedPin.length() == 6) {
-    pairingPin = providedPin;
-    Serial.printf("PIN ingresado por el usuario: %s\n", pairingPin.c_str());
-  } else if (!isLinked) {
-    Serial.println("Advertencia: No se ingresó un PIN válido de 6 dígitos.");
+  if (!isLinked) {
+    bool valid = (providedPin.length() == 6);
+    for (unsigned int i = 0; i < providedPin.length(); i++) {
+      if (!isdigit(providedPin[i])) valid = false;
+    }
+
+    if (valid) {
+      pairingPin = providedPin;
+      Serial.printf("PIN válido ingresado por el usuario: %s\n", pairingPin.c_str());
+    } else {
+      Serial.println("\n[ERROR CRÍTICO] PIN inválido. Debe contener exactamente 6 dígitos numéricos (0-9).");
+      Serial.println("Rechazando conexión. Borrando red guardada y reiniciando portal cautivo...");
+      wm.resetSettings(); // Borra credenciales para forzar el portal otra vez
+      delay(3000);
+      ESP.restart();
+    }
   }
 
   // Sincronizar hora para validación de tokens SSL/JWT de Firebase
