@@ -183,6 +183,7 @@ void setup() {
   Serial.println("\n¡Wi-Fi Conectado exitosamente!");
 
   String providedPin = custom_pin.getValue();
+  
   if (!isLinked) {
     bool valid = (providedPin.length() == 6);
     for (unsigned int i = 0; i < providedPin.length(); i++) {
@@ -421,8 +422,8 @@ void loop() {
           Serial.printf("Error al subir datos: %s\n", fbData.errorReason().c_str());
         }
 
-        // Subida de historial (cada 15 min = 900000 ms)
-        if (currentMillis - lastHistoryUploadTime > 900000 || lastHistoryUploadTime == 0) {
+        // Subida de historial (TEMPORAL: cada 30 segundos para probar el gráfico de historial)
+        if (currentMillis - lastHistoryUploadTime > 30000 || lastHistoryUploadTime == 0) {
           lastHistoryUploadTime = currentMillis;
           String historyPath = "/telemetry/" + deviceMac + "/history";
           if (Firebase.RTDB.pushJSON(&fbData, historyPath, &json)) {
