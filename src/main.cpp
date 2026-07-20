@@ -1,11 +1,17 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClient.h>
 #include <WiFiManager.h>
 #include <DHT.h>
-#include <FirebaseESP8266.h>
+#include <Firebase_ESP_Client.h>
+#include <EEPROM.h>
 
 #define DHTPIN D7       // Pin de datos del DHT22
 #define DHTTYPE DHT22   // Tipo de sensor
+
+#define RESET_PIN 0     // Botón Flash del NodeMCU (GPIO 0 / D3)
+#define RELAY_PIN D1    // Pin para controlar actuadores (Ej: Ventilador o Luz)
 
 DHT dht(DHTPIN, DHTTYPE);
 
@@ -17,79 +23,256 @@ FirebaseConfig fbConfig;
 FirebaseAuth fbAuth;
 
 String deviceMac = "";
+bool isLinked = false;
+String pairingPin = "";
+bool pinUploaded = false;
+String deviceToken = "";
+
+unsigned long lastSensorReadTime = 0;
+unsigned long buttonPressStartTime = 0;
+bool isButtonPressed = false;
+
+// Variables para el sobremuestreo del sensor
+int consecutiveSensorFailures = 0;
+float sumTemp = 0;
+float sumHum = 0;
+int readCount = 0;
+
+void saveTokenToEEPROM(String token) {
+  for (int i = 0; i < 32; ++i) {
+    if (i < (int)token.length()) {
+      EEPROM.write(i, token[i]);
+    } else {
+      EEPROM.write(i, 0);
+    }
+  }
+  EEPROM.commit();
+  Serial.println("Token guardado en EEPROM.");
+}
+
+String loadTokenFromEEPROM() {
+  String token = "";
+  for (int i = 0; i < 32; ++i) {
+    char c = EEPROM.read(i);
+    if (c == 0 || c == 255) break; // Si está vacío o borrado
+    token += c;
+  }
+  return token;
+}
+
+void factoryReset() {
+  Serial.println("Iniciando Reseteo de Fábrica...");
+  // Borrar EEPROM
+  for (int i = 0; i < 512; ++i) EEPROM.write(i, 255);
+  EEPROM.commit();
+  Serial.println("EEPROM borrada.");
+  
+  // Borrar WiFi credentials
+  WiFiManager wm;
+  wm.resetSettings();
+  Serial.println("Credenciales Wi-Fi borradas. Reiniciando...");
+  delay(1000);
+  ESP.restart();
+}
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n--- Iniciando PLANNTIX-DEVICES ---");
+  Serial.println("\n--- Iniciando PLANNTIX-DEVICES (PRO) ---");
   
+  pinMode(RESET_PIN, INPUT_PULLUP);
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW); // Apagado por defecto
+  
+  EEPROM.begin(512);
   dht.begin();
 
-  // 1. Configurar WiFiManager (Portal Cautivo)
-  WiFiManager wm;
-  Serial.println("Conectando al Wi-Fi o abriendo portal cautivo...");
-  
-  // Intenta conectarse al Wi-Fi guardado. Si falla, genera la red "PLANNTIX-Config"
-  bool connected = wm.autoConnect("PLANNTIX-Config");
-
-  if (!connected) {
-    Serial.println("Fallo al conectar al Wi-Fi. Reiniciando placa...");
-    delay(3000);
-    ESP.restart();
-  }
-
-  Serial.println("\n¡Wi-Fi Conectado exitosamente!");
-  
-  // Obtener y formatear la dirección MAC (será el ID único del dispositivo)
+  // Obtener y formatear la dirección MAC (será el ID único)
   deviceMac = WiFi.macAddress();
-  deviceMac.replace(":", "_"); // Reemplazar dos puntos para evitar problemas en rutas de Firebase
+  deviceMac.replace(":", "_");
+  deviceMac.toLowerCase();
   Serial.print("ID del dispositivo (MAC): ");
   Serial.println(deviceMac);
 
+  // Intentar cargar el Token
+  deviceToken = loadTokenFromEEPROM();
+  if (deviceToken.length() > 5) {
+    isLinked = true;
+    Serial.println("Token encontrado en memoria. Dispositivo Vinculado.");
+  } else {
+    Serial.println("No hay token. Dispositivo Desvinculado.");
+  }
+
+  // 1. Configurar WiFiManager (Portal Cautivo)
+  WiFiManager wm;
+  wm.setAPStaticIPConfig(IPAddress(10, 0, 1, 1), IPAddress(10, 0, 1, 1), IPAddress(255, 255, 255, 0));
+  wm.setCaptivePortalEnable(true);
+  wm.setConfigPortalTimeout(180); // 3 minutos de tiempo de espera
+  
+  // Agregar campo personalizado para el PIN
+  WiFiManagerParameter custom_pin("pin", "C&oacute;digo de Vinculaci&oacute;n (6 d&iacute;gitos)", "", 7);
+  wm.addParameter(&custom_pin);
+
+  if (!isLinked) {
+    Serial.println("Dispositivo no vinculado. Forzando portal cautivo para pedir el PIN...");
+    if (!wm.startConfigPortal("PLANNTIX-Config")) {
+      Serial.println("Timeout en el portal. Reiniciando...");
+      delay(3000);
+      ESP.restart();
+    }
+  } else {
+    Serial.println("Conectando al Wi-Fi guardado...");
+    if (!wm.autoConnect("PLANNTIX-Config")) {
+      Serial.println("Fallo al conectar al Wi-Fi. Reiniciando placa...");
+      delay(3000);
+      ESP.restart();
+    }
+  }
+
+  Serial.println("\n¡Wi-Fi Conectado exitosamente!");
+
+  String providedPin = custom_pin.getValue();
+  if (!isLinked && providedPin.length() == 6) {
+    pairingPin = providedPin;
+    Serial.printf("PIN ingresado por el usuario: %s\n", pairingPin.c_str());
+  } else if (!isLinked) {
+    Serial.println("Advertencia: No se ingresó un PIN válido de 6 dígitos.");
+  }
+
+  // Sincronizar hora para validación de tokens SSL/JWT de Firebase
+  Serial.print("Sincronizando hora con internet (NTP)...");
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  time_t now = time(nullptr);
+  while (now < 8 * 3600 * 2) {
+    delay(500);
+    Serial.print(".");
+    now = time(nullptr);
+  }
+  Serial.println("\nHora sincronizada exitosamente.");
+
   // 2. Inicializar Firebase
   fbConfig.database_url = FIREBASE_HOST;
-  // Si tu base de datos tiene reglas restrictivas, podrías requerir un token o secret
-  // fbConfig.signer.tokens.legacy_token = "TU_DATABASE_SECRET"; 
+  fbConfig.signer.test_mode = true;
   
   Firebase.begin(&fbConfig, &fbAuth);
   Firebase.reconnectWiFi(true);
   Serial.println("Firebase inicializado.");
+  
+  // Establecer estado inicial
+  String presencePath = "/telemetry/" + deviceMac + "/status";
+  if (!Firebase.RTDB.setString(&fbData, presencePath, "online")) {
+    Serial.printf("Error de Firebase (Status): %s\n", fbData.errorReason().c_str());
+  }
 }
 
 void loop() {
-  // Leer el sensor cada 5 segundos
-  delay(5000);
+  unsigned long currentMillis = millis();
 
-  float humedad = dht.readHumidity();
-  float temperatura = dht.readTemperature();
-
-  // Validar lecturas
-  if (isnan(humedad) || isnan(temperatura)) {
-    Serial.println("Error al leer el sensor DHT22. ¡Revisá las conexiones!");
-    return;
+  // 1. LÓGICA DE RESET DE FÁBRICA
+  if (digitalRead(RESET_PIN) == LOW) {
+    if (!isButtonPressed) {
+      isButtonPressed = true;
+      buttonPressStartTime = currentMillis;
+    } else if (currentMillis - buttonPressStartTime > 5000) {
+      factoryReset(); // Resetea si se aprieta > 5 seg
+    }
+  } else {
+    isButtonPressed = false;
   }
 
-  // Mostrar en consola local
-  Serial.print("Humedad: ");
-  Serial.print(humedad);
-  Serial.print("%  |  Temperatura: ");
-  Serial.print(temperatura);
-  Serial.println("°C");
+  // 2. LÓGICA DE APROVISIONAMIENTO Y CONTROL (NON-BLOCKING)
+  if (!isLinked) {
+    // Si no está vinculado y tenemos PIN, anunciar MAC en Firebase
+    if (!pinUploaded && pairingPin.length() == 6) {
+      FirebaseJson pinJson;
+      pinJson.add("mac", deviceMac);
+      pinJson.add("timestamp", (int)time(nullptr));
+      String pinPath = "/unlinked_devices/" + pairingPin;
+      
+      if (Firebase.RTDB.setJSON(&fbData, pinPath, &pinJson)) {
+        pinUploaded = true;
+        Serial.println("MAC subida a Firebase bajo el PIN ingresado.");
+      } else {
+        Serial.printf("Error de Firebase al subir PIN: %s\n", fbData.errorReason().c_str());
+      }
+    }
 
-  // 3. Crear JSON y enviar a Firebase Realtime Database
-  FirebaseJson json;
-  json.add("temperature", temperatura);
-  json.add("humidity", humedad);
-  
-  // Ruta en Firebase según convención de PLANNTIX: /telemetry/[MAC]/latest
-  String path = "/telemetry/" + deviceMac + "/latest";
-  
-  Serial.print("Enviando datos a Firebase en ");
-  Serial.println(path);
-
-  if (Firebase.setJSON(fbData, path, json)) {
-    Serial.println("¡Datos subidos con éxito!");
+    // Comprobar periódicamente si llegó el token desde la web (cada 5s)
+    if (currentMillis - lastSensorReadTime > 5000) {
+      lastSensorReadTime = currentMillis;
+      String tokenPath = "/telemetry/" + deviceMac + "/config/secret_token";
+      String receivedToken = "";
+      
+      Serial.println("Esperando token de vinculación de Firebase...");
+      if (Firebase.RTDB.getString(&fbData, tokenPath)) {
+        receivedToken = fbData.stringData();
+        if (receivedToken.length() > 5) {
+          deviceToken = receivedToken;
+          saveTokenToEEPROM(deviceToken);
+          isLinked = true;
+          Serial.println("¡Dispositivo vinculado con éxito y token asegurado!");
+          // Limpiar huérfano
+          if (pairingPin.length() == 6) {
+            Firebase.RTDB.deleteNode(&fbData, "/unlinked_devices/" + pairingPin);
+          }
+        }
+      }
+    }
   } else {
-    Serial.print("Error al subir datos: ");
-    Serial.println(fbData.errorReason());
+    // DISPOSITIVO VINCULADO: LEER SENSORES Y ACTUADORES (cada 10s)
+    if (currentMillis - lastSensorReadTime > 10000) {
+      lastSensorReadTime = currentMillis;
+
+      // Lectura del Sensor
+      float humedad = dht.readHumidity();
+      float temperatura = dht.readTemperature();
+
+      if (isnan(humedad) || isnan(temperatura)) {
+        Serial.println("Error al leer el sensor DHT22. (NaN)");
+        consecutiveSensorFailures++;
+        if (consecutiveSensorFailures >= 10) {
+          Serial.println("¡Demasiados fallos consecutivos del sensor! Reiniciando placa por seguridad...");
+          delay(2000);
+          ESP.restart();
+        }
+      } else {
+        consecutiveSensorFailures = 0; // Se recuperó, reiniciamos contador
+        sumHum += humedad;
+        sumTemp += temperatura;
+        readCount++;
+      }
+
+      // Cada 3 lecturas exitosas (aprox 30s) subimos el promedio
+      if (readCount >= 3) {
+        float avgHum = sumHum / 3.0;
+        float avgTemp = sumTemp / 3.0;
+        
+        sumHum = 0;
+        sumTemp = 0;
+        readCount = 0;
+
+        Serial.printf("Promedio 30s -> Humedad: %.1f%%  |  Temperatura: %.1f°C\n", avgHum, avgTemp);
+
+        // Control de Actuadores (Lectura de Firebase)
+        bool relayState = false;
+        String controlPath = "/telemetry/" + deviceMac + "/control/relay1";
+        if (Firebase.RTDB.getBool(&fbData, controlPath, &relayState)) {
+           digitalWrite(RELAY_PIN, relayState ? HIGH : LOW);
+           Serial.printf("Relé actualizado a: %s\n", relayState ? "ENCENDIDO" : "APAGADO");
+        }
+
+        // Subida de datos segura
+        FirebaseJson json;
+        json.add("temperature", avgTemp);
+        json.add("humidity", avgHum);
+        json.add("token", deviceToken); // ¡Firma el paquete con el token secreto!
+        
+        String path = "/telemetry/" + deviceMac + "/latest";
+        if (Firebase.RTDB.setJSON(&fbData, path, &json)) {
+          Serial.println("¡Promedio subido de forma segura a Firebase!");
+        } else {
+          Serial.printf("Error al subir datos: %s\n", fbData.errorReason().c_str());
+        }
+      }
+    }
   }
 }
