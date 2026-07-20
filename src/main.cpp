@@ -30,6 +30,7 @@ bool pinUploaded = false;
 String deviceToken = "";
 
 unsigned long lastSensorReadTime = 0;
+unsigned long lastHistoryUploadTime = 0;
 unsigned long buttonPressStartTime = 0;
 bool isButtonPressed = false;
 volatile bool forceConfigUpdate = true;
@@ -418,6 +419,17 @@ void loop() {
           Serial.println("¡Promedio subido de forma segura a Firebase!");
         } else {
           Serial.printf("Error al subir datos: %s\n", fbData.errorReason().c_str());
+        }
+
+        // Subida de historial (cada 15 min = 900000 ms)
+        if (currentMillis - lastHistoryUploadTime > 900000 || lastHistoryUploadTime == 0) {
+          lastHistoryUploadTime = currentMillis;
+          String historyPath = "/telemetry/" + deviceMac + "/history";
+          if (Firebase.RTDB.pushJSON(&fbData, historyPath, &json)) {
+            Serial.println("¡Punto de historial subido a Firebase!");
+          } else {
+            Serial.printf("Error al subir historial: %s\n", fbData.errorReason().c_str());
+          }
         }
       }
     }
