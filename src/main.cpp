@@ -32,6 +32,14 @@ unsigned long lastSensorReadTime = 0;
 unsigned long buttonPressStartTime = 0;
 bool isButtonPressed = false;
 
+// Schedule Settings
+bool lightIsOn = false;         
+String lightMode = "manual";    
+int lightOnHour = 6;
+int lightOnMin = 0;
+int lightOffHour = 18;
+int lightOffMin = 0;
+
 // Variables para el sobremuestreo del sensor
 int consecutiveSensorFailures = 0;
 float sumTemp = 0;
@@ -60,6 +68,34 @@ String loadTokenFromEEPROM() {
     token += c;
   }
   return token;
+}
+
+void saveScheduleToEEPROM() {
+  EEPROM.write(64, lightMode == "auto" ? 1 : 0);
+  EEPROM.write(65, lightOnHour);
+  EEPROM.write(66, lightOnMin);
+  EEPROM.write(67, lightOffHour);
+  EEPROM.write(68, lightOffMin);
+  EEPROM.commit();
+  Serial.println("Horarios guardados en EEPROM.");
+}
+
+void loadScheduleFromEEPROM() {
+  byte mode = EEPROM.read(64);
+  lightMode = (mode == 1) ? "auto" : "manual";
+  
+  lightOnHour = EEPROM.read(65);
+  lightOnMin = EEPROM.read(66);
+  lightOffHour = EEPROM.read(67);
+  lightOffMin = EEPROM.read(68);
+  
+  if (lightOnHour > 23) lightOnHour = 6;
+  if (lightOnMin > 59) lightOnMin = 0;
+  if (lightOffHour > 23) lightOffHour = 18;
+  if (lightOffMin > 59) lightOffMin = 0;
+  
+  Serial.printf("Horarios cargados de EEPROM: Modo=%s, ON=%02d:%02d, OFF=%02d:%02d\n", 
+                lightMode.c_str(), lightOnHour, lightOnMin, lightOffHour, lightOffMin);
 }
 
 void factoryReset() {
@@ -103,6 +139,9 @@ void setup() {
   } else {
     Serial.println("No hay token. Dispositivo Desvinculado.");
   }
+
+  // Cargar horarios guardados
+  loadScheduleFromEEPROM();
 
   // 1. Configurar WiFiManager (Portal Cautivo)
   WiFiManager wm;
@@ -151,9 +190,9 @@ void setup() {
     }
   }
 
-  // Sincronizar hora para validación de tokens SSL/JWT de Firebase
-  Serial.print("Sincronizando hora con internet (NTP)...");
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  // Sincronizar hora para validación de tokens SSL/JWT y reloj interno
+  Serial.print("Sincronizando hora con internet (NTP UTC-3)...");
+  configTime(-3 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   time_t now = time(nullptr);
   int ntpTimeout = 0;
   while (now < 8 * 3600 * 2 && ntpTimeout < 60) { // 60 iteraciones x 500ms = 30 segundos
@@ -284,13 +323,59 @@ void loop() {
 
         Serial.printf("Promedio 30s -> Humedad: %.1f%%  |  Temperatura: %.1f°C\n", avgHum, avgTemp);
 
-        // Control de Actuadores (Lectura de Firebase)
-        bool relayState = false;
-        String controlPath = "/telemetry/" + deviceMac + "/control/relay1";
-        if (Firebase.RTDB.getBool(&fbData, controlPath, &relayState)) {
-           digitalWrite(RELAY_PIN, relayState ? HIGH : LOW);
-           Serial.printf("Relé actualizado a: %s\n", relayState ? "ENCENDIDO" : "APAGADO");
+        // Control de Actuadores y Lectura de Configuración de Firebase
+        String configPath = "/telemetry/" + deviceMac + "/config/light";
+        if (Firebase.RTDB.getJSON(&fbData, configPath)) {
+          FirebaseJsonData jsonData;
+          FirebaseJson &json = fbData.jsonObject();
+          
+          bool changed = false;
+          
+          json.get(jsonData, "lightMode");
+          if(jsonData.success && lightMode != jsonData.stringValue) { lightMode = jsonData.stringValue; changed = true; }
+          
+          json.get(jsonData, "isOn");
+          if(jsonData.success && lightIsOn != jsonData.boolValue) { lightIsOn = jsonData.boolValue; } // No guardamos 'isOn' en EEPROM, solo el modo y horario.
+
+          json.get(jsonData, "onTime");
+          if(jsonData.success) {
+            String onT = jsonData.stringValue;
+            int h = onT.substring(0, 2).toInt();
+            int m = onT.substring(3, 5).toInt();
+            if (lightOnHour != h || lightOnMin != m) { lightOnHour = h; lightOnMin = m; changed = true; }
+          }
+
+          json.get(jsonData, "offTime");
+          if(jsonData.success) {
+            String offT = jsonData.stringValue;
+            int h = offT.substring(0, 2).toInt();
+            int m = offT.substring(3, 5).toInt();
+            if (lightOffHour != h || lightOffMin != m) { lightOffHour = h; lightOffMin = m; changed = true; }
+          }
+          
+          if (changed) saveScheduleToEEPROM();
         }
+
+        // Evaluar Horario (Reloj Interno)
+        bool targetRelayState = false;
+        if (lightMode == "manual") {
+          targetRelayState = lightIsOn;
+        } else {
+          time_t now = time(nullptr);
+          struct tm* timeinfo = localtime(&now);
+          int currentTotalMins = timeinfo->tm_hour * 60 + timeinfo->tm_min;
+          int onTotalMins = lightOnHour * 60 + lightOnMin;
+          int offTotalMins = lightOffHour * 60 + lightOffMin;
+          
+          if (onTotalMins < offTotalMins) {
+            targetRelayState = (currentTotalMins >= onTotalMins && currentTotalMins < offTotalMins);
+          } else {
+            targetRelayState = (currentTotalMins >= onTotalMins || currentTotalMins < offTotalMins);
+          }
+        }
+        
+        digitalWrite(RELAY_PIN, targetRelayState ? HIGH : LOW);
+        Serial.printf("Relé (Modo: %s) -> %s\n", lightMode.c_str(), targetRelayState ? "ENCENDIDO" : "APAGADO");
 
         // Subida de datos de telemetría
         FirebaseJson json;
