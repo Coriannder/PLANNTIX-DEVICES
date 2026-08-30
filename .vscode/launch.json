@@ -12,8 +12,8 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug",
-            "executable": "C:/Users/sebas/Desktop/Dev-projects/PLANNTIX-DEVICES/.pio/build/nodemcuv2/firmware.elf",
-            "projectEnvName": "nodemcuv2",
+            "executable": "C:/Users/sebas/Desktop/Dev-projects/PLANNTIX-DEVICES/.pio/build/planntix_esp8266/firmware.elf",
+            "projectEnvName": "planntix_esp8266",
             "toolchainBinDir": "C:/Users/sebas/.platformio/packages/toolchain-xtensa/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "preLaunchTask": {
@@ -25,8 +25,8 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (skip Pre-Debug)",
-            "executable": "C:/Users/sebas/Desktop/Dev-projects/PLANNTIX-DEVICES/.pio/build/nodemcuv2/firmware.elf",
-            "projectEnvName": "nodemcuv2",
+            "executable": "C:/Users/sebas/Desktop/Dev-projects/PLANNTIX-DEVICES/.pio/build/planntix_esp8266/firmware.elf",
+            "projectEnvName": "planntix_esp8266",
             "toolchainBinDir": "C:/Users/sebas/.platformio/packages/toolchain-xtensa/bin",
             "internalConsoleOptions": "openOnSessionStart"
         },
@@ -34,8 +34,8 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (without uploading)",
-            "executable": "C:/Users/sebas/Desktop/Dev-projects/PLANNTIX-DEVICES/.pio/build/nodemcuv2/firmware.elf",
-            "projectEnvName": "nodemcuv2",
+            "executable": "C:/Users/sebas/Desktop/Dev-projects/PLANNTIX-DEVICES/.pio/build/planntix_esp8266/firmware.elf",
+            "projectEnvName": "planntix_esp8266",
             "toolchainBinDir": "C:/Users/sebas/.platformio/packages/toolchain-xtensa/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "loadMode": "manual"
