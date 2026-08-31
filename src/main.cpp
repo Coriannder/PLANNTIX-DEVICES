@@ -233,13 +233,15 @@ void streamTimeoutCallback(bool timeout) {
 }
 
 void performCloudOTA(String url, String targetVersion, String targetBoard) {
-  if (targetBoard != "" && targetBoard != BOARD_TYPE) {
+  if (targetBoard != "" && targetBoard != BOARD_TYPE && targetBoard != "ESP8266_NODEMCU") {
     Serial.printf("[OTA] Rechazado: La actualización es para placa '%s', este dispositivo es '%s'\n", targetBoard.c_str(), BOARD_TYPE);
+    Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/ota/status", "idle");
     return;
   }
 
   if (targetVersion == FIRMWARE_VERSION) {
     Serial.printf("[OTA] El dispositivo ya está en la versión objetivo (%s). Omitiendo.\n", FIRMWARE_VERSION);
+    Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/ota/status", "idle");
     return;
   }
 
@@ -252,15 +254,28 @@ void performCloudOTA(String url, String targetVersion, String targetBoard) {
   // Apagar relé por seguridad durante la actualización
   digitalWrite(RELAY_PIN, LOW);
 
-  WiFiClientSecure client;
-  client.setInsecure(); // Permite descargar por HTTPS sin cargar certificados SSL de GitHub/AWS
-  client.setTimeout(12000);
+  // Liberar memoria RAM de Firebase para que el cliente SSL tenga espacio suficiente
+  fbData.clear();
+  streamData.clear();
 
-  // GitHub Releases usa redirecciones HTTP 302 hacia AWS S3
-  ESPhttpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP); // Máxima velocidad WiFi para la descarga
+  ESPhttpUpdate.setClientTimeout(30000);
+  ESPhttpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   ESPhttpUpdate.rebootOnUpdate(true);
 
-  t_httpUpdate_return ret = ESPhttpUpdate.update(client, url);
+  t_httpUpdate_return ret;
+
+  if (url.startsWith("https://")) {
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+    secureClient.setBufferSizes(4096, 512);
+    secureClient.setTimeout(30000);
+    ret = ESPhttpUpdate.update(secureClient, url);
+  } else {
+    WiFiClient plainClient;
+    plainClient.setTimeout(30000);
+    ret = ESPhttpUpdate.update(plainClient, url);
+  }
 
   switch (ret) {
     case HTTP_UPDATE_FAILED: {
@@ -268,7 +283,7 @@ void performCloudOTA(String url, String targetVersion, String targetBoard) {
       int errorCode = ESPhttpUpdate.getLastError();
       Serial.printf("[OTA ERROR] Falló la actualización (%d): %s\n", errorCode, errorMsg.c_str());
       
-      // Notificar error en Firebase
+      // Notificar error en Firebase y limpiar estado pendiente para evitar bucles
       Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/status", "online");
       Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/ota/status", "error: " + errorMsg);
       break;
@@ -276,6 +291,7 @@ void performCloudOTA(String url, String targetVersion, String targetBoard) {
     case HTTP_UPDATE_NO_UPDATES:
       Serial.println("[OTA] No hay actualizaciones disponibles.");
       Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/status", "online");
+      Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/ota/status", "idle");
       break;
     case HTTP_UPDATE_OK:
       Serial.println("[OTA] ¡Actualización exitosa! Reiniciando...");
@@ -497,22 +513,28 @@ void loop() {
     if (Firebase.RTDB.getJSON(&fbData, otaPath)) {
       FirebaseJsonData jsonData;
       FirebaseJson &json = fbData.jsonObject();
-      
-      json.get(jsonData, "url");
-      if (jsonData.success && jsonData.stringValue.length() > 10) {
-        String otaUrl = jsonData.stringValue;
-        String otaVersion = "";
-        String otaBoard = "";
 
-        json.get(jsonData, "version");
-        if (jsonData.success) otaVersion = jsonData.stringValue;
+      String otaStatus = "";
+      json.get(jsonData, "status");
+      if (jsonData.success) otaStatus = jsonData.stringValue;
 
-        json.get(jsonData, "board");
-        if (jsonData.success) otaBoard = jsonData.stringValue;
+      // Solo proceder si hay una orden pendiente de ejecución
+      if (otaStatus == "pending") {
+        json.get(jsonData, "url");
+        if (jsonData.success && jsonData.stringValue.length() > 10) {
+          String otaUrl = jsonData.stringValue;
+          String otaVersion = "";
+          String otaBoard = "";
 
-        // Si la versión es distinta a la actual, ejecutamos la actualización
-        if (otaVersion != "" && otaVersion != FIRMWARE_VERSION) {
-          performCloudOTA(otaUrl, otaVersion, otaBoard);
+          json.get(jsonData, "version");
+          if (jsonData.success) otaVersion = jsonData.stringValue;
+
+          json.get(jsonData, "board");
+          if (jsonData.success) otaBoard = jsonData.stringValue;
+
+          if (otaVersion != "" && otaVersion != FIRMWARE_VERSION) {
+            performCloudOTA(otaUrl, otaVersion, otaBoard);
+          }
         }
       }
     }
@@ -746,6 +768,8 @@ void loop() {
         json.add("temperature", avgTemp);
         json.add("humidity", avgHum);
         json.add("isLightOn", digitalRead(RELAY_PIN) == HIGH);
+        json.add("version", FIRMWARE_VERSION);
+        json.add("board", BOARD_TYPE);
         json.add("timestamp", (int)time(nullptr));
         // NOTA: No enviamos el deviceToken en texto plano aquí para no exponerlo en reposo.
         
