@@ -249,37 +249,71 @@ void performCloudOTA(String url, String targetVersion, String targetBoard) {
   Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/status", "updating");
   Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/ota/status", "downloading");
 
-  // Apagar relé por seguridad durante la actualización
-  digitalWrite(RELAY_PIN, LOW);
-
-  WiFiClientSecure client;
-  client.setInsecure(); // Permite descargar por HTTPS sin cargar certificados SSL de GitHub/AWS
-  client.setTimeout(12000);
-
-  // GitHub Releases usa redirecciones HTTP 302 hacia AWS S3
-  ESPhttpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  ESPhttpUpdate.rebootOnUpdate(true);
-
-  t_httpUpdate_return ret = ESPhttpUpdate.update(client, url);
-
-  switch (ret) {
-    case HTTP_UPDATE_FAILED: {
-      String errorMsg = ESPhttpUpdate.getLastErrorString();
-      int errorCode = ESPhttpUpdate.getLastError();
-      Serial.printf("[OTA ERROR] Falló la actualización (%d): %s\n", errorCode, errorMsg.c_str());
-      
-      // Notificar error en Firebase
-      Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/status", "online");
-      Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/ota/status", "error: " + errorMsg);
-      break;
+  // Guardar flag OTA (1 = pendiente) en dirección 100
+  EEPROM.write(100, 1);
+  // Guardar URL hasta 200 caracteres en dir 101 a 300
+  int maxUrlLen = 200;
+  for (int i = 0; i < maxUrlLen; i++) {
+    if (i < (int)url.length()) {
+      EEPROM.write(101 + i, url[i]);
+    } else {
+      EEPROM.write(101 + i, 0);
     }
-    case HTTP_UPDATE_NO_UPDATES:
-      Serial.println("[OTA] No hay actualizaciones disponibles.");
-      Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/status", "online");
-      break;
-    case HTTP_UPDATE_OK:
-      Serial.println("[OTA] ¡Actualización exitosa! Reiniciando...");
-      break;
+  }
+  EEPROM.commit();
+
+  Serial.println("[OTA] Flag guardado en EEPROM. Reiniciando para OTA con memoria limpia...");
+  delay(1000);
+  ESP.restart();
+}
+
+String otaBootErrorMessage = "";
+
+void executePendingOTA() {
+  if (EEPROM.read(100) == 1) { // Hay un OTA pendiente
+    EEPROM.write(100, 0); // Limpiar flag para no ciclar
+    EEPROM.commit();
+
+    String url = "";
+    for (int i = 0; i < 200; i++) {
+      char c = EEPROM.read(101 + i);
+      if (c == 0) break;
+      url += c;
+    }
+
+    if (url.length() < 5) {
+      Serial.println("[OTA BOOT] URL inválida en EEPROM.");
+      return;
+    }
+
+    Serial.println("\n[OTA BOOT] Iniciando actualización limpia desde:");
+    Serial.println(url);
+    Serial.printf("[OTA BOOT] RAM libre antes de OTA: %u bytes\n", ESP.getFreeHeap());
+
+    ESPhttpUpdate.setClientTimeout(60000);
+    ESPhttpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    ESPhttpUpdate.rebootOnUpdate(true);
+
+    t_httpUpdate_return ret;
+    if (url.startsWith("https://")) {
+      WiFiClientSecure client;
+      client.setInsecure();
+      client.setBufferSizes(16384, 512);
+      client.setTimeout(60000);
+      ret = ESPhttpUpdate.update(client, url);
+    } else {
+      WiFiClient client;
+      client.setTimeout(30000);
+      ret = ESPhttpUpdate.update(client, url);
+    }
+
+    if (ret == HTTP_UPDATE_FAILED) {
+      otaBootErrorMessage = ESPhttpUpdate.getLastErrorString();
+      if (otaBootErrorMessage.length() == 0) {
+        otaBootErrorMessage = "Error desconocido (" + String(ESPhttpUpdate.getLastError()) + ")";
+      }
+      Serial.printf("[OTA BOOT ERROR] (%d): %s\n", ESPhttpUpdate.getLastError(), otaBootErrorMessage.c_str());
+    }
   }
 }
 
@@ -346,7 +380,11 @@ void setup() {
   if (isLinked) {
     Serial.print("Buscando redes Multi-WiFi guardadas (timeout 5s)... ");
     uint8_t status = wifiMulti.run(5000);
-    if (status == WL_CONNECTED) {
+  
+    // ¡Apenas tenemos WiFi, comprobamos si hay un OTA pendiente con la RAM limpia!
+    executePendingOTA();
+  
+    if (status == WL_CONNECTED || WiFi.status() == WL_CONNECTED) {
       connectedViaMulti = true;
       Serial.printf("\n¡Conectado exitosamente a la mejor red: %s!\n", WiFi.SSID().c_str());
     } else {
@@ -469,6 +507,11 @@ void setup() {
   Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/info/version", FIRMWARE_VERSION);
   Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/info/board", BOARD_TYPE);
   Firebase.RTDB.setBool(&fbData, "/telemetry/" + deviceMac + "/latest/isLightOn", digitalRead(RELAY_PIN) == HIGH);
+
+  if (otaBootErrorMessage.length() > 0) {
+    Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/ota/status", "error: " + otaBootErrorMessage);
+    otaBootErrorMessage = "";
+  }
 
   if (isLinked) {
     if (Firebase.RTDB.beginStream(&streamData, "/telemetry/" + deviceMac + "/config/light")) {
