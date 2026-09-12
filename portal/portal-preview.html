@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PLANNTIX - Preview Portal Cautivo</title>
+
+  <!-- CSS base de WiFiManager (copia de wm_strings_es.h :: HTTP_STYLE) -->
+  <style>
+    .c, body { text-align: center; font-family: verdana; }
+    div, input, select { padding: 5px; font-size: 1em; margin: 5px 0; box-sizing: border-box; }
+    input, button, select, .msg { border-radius: .3rem; width: 100%; }
+    input[type=radio], input[type=checkbox] { width: auto; }
+    button, input[type='button'], input[type='submit'] { cursor: pointer; border: 0; background-color: #1fa3ec; color: #fff; line-height: 2.4rem; font-size: 1.2rem; width: 100%; }
+    input[type='file'] { border: 1px solid #1fa3ec; }
+    .wrap { text-align: left; display: inline-block; min-width: 260px; max-width: 500px; }
+    a { color: #000; font-weight: 700; text-decoration: none; }
+    a:hover { color: #1fa3ec; text-decoration: underline; }
+    .q { height: 16px; margin: 0; padding: 0 5px; text-align: right; min-width: 38px; float: right; }
+    .msg { padding: 20px; margin: 20px 0; border: 1px solid #eee; border-left-width: 5px; border-left-color: #777; }
+    .msg h4 { margin-top: 0; margin-bottom: 5px; }
+    .msg.D { border-left-color: #dc3630; }
+    .msg.S { border-left-color: #5cb85c; }
+    .h { display: none; }
+  </style>
+
+  <!-- CSS custom de PLANNTIX (mismo archivo que embebe el firmware) -->
+  <link rel="stylesheet" href="portal.css" />
+</head>
+<body>
+  <div class="wrap">
+    <h1>PLANNTIX</h1>
+    <h3>WiFiManager</h3>
+
+    <p class="connected-network">Conectado a <strong>CasaWiFi</strong></p>
+
+    <form method="POST" action="/pin">
+      <label for="pin">PIN de Vinculación</label>
+      <input id="pin" name="pin" maxlength="6" value="" placeholder="123456" inputmode="numeric" pattern="[0-9]*" />
+      <p style="font-size:12px;color:#bbcabf;text-align:center;margin:-6px 0 16px 0;">Ingresa el código generado en tu App PLANNTIX</p>
+
+      <br /><br />
+      <button type="submit">Vincular</button>
+    </form>
+
+    <a class="secondary-button" href="#">Cambiar red WiFi</a>
+
+  </div>
+</body>
+</html>

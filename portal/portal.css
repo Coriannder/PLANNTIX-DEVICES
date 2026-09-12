@@ -1,0 +1,238 @@
+/* ============================================================
+   PLANNTIX - UI custom del portal cautivo (WiFiManager)
+   Fuente unica de verdad:
+     - Firmware: scripts/embed_portal.py genera src/portal_head.h
+     - Navegador: portal/portal-preview.html carga este archivo
+   ============================================================ */
+
+:root {
+  --bg: #08110d;
+  --card: #0f1b17;
+  --field: #101f1a;
+  --border: rgba(114, 255, 194, 0.16);
+  --border-strong: rgba(114, 255, 194, 0.34);
+  --text: #effaf5;
+  --muted: #94aaa0;
+  --primary: #58e6a8;
+  --primary-dark: #062218;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body {
+  min-height: 100vh;
+  margin: 0 !important;
+  padding: 28px 16px !important;
+  color: var(--text) !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  background: var(--bg) !important;
+}
+
+.wrap {
+  display: block !important;
+  width: 100% !important;
+  max-width: 360px !important;
+  min-width: 0 !important;
+  margin: 0 auto !important;
+  padding: 26px 22px 22px !important;
+  text-align: left !important;
+  background: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 22px !important;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.34) !important;
+}
+
+.wrap h1 {
+  margin: 0 0 24px !important;
+  color: var(--text) !important;
+  font-size: 26px !important;
+  font-weight: 800 !important;
+  letter-spacing: 1.4px !important;
+  line-height: 1 !important;
+  text-align: center !important;
+  background: transparent !important;
+}
+
+.wrap h1::before {
+  content: '';
+  display: block;
+  width: 10px;
+  height: 10px;
+  margin: 0 auto 13px;
+  border-radius: 999px;
+  background: var(--primary);
+  box-shadow: 0 0 24px rgba(88, 230, 168, 0.5);
+}
+
+.wrap h3 { display: none !important; }
+
+.wrap form {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.wrap label {
+  display: block !important;
+  margin: 14px 0 7px !important;
+  color: var(--muted) !important;
+  font-size: 12px !important;
+  font-weight: 650 !important;
+  letter-spacing: 0.2px;
+  text-align: left !important;
+}
+
+.wrap input,
+.wrap select {
+  width: 100% !important;
+  min-height: 46px;
+  margin: 0 0 12px !important;
+  padding: 12px 14px !important;
+  color: var(--text) !important;
+  font-size: 15px !important;
+  background-color: var(--field) !important;
+  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+  border-radius: 13px !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.wrap input::placeholder { color: rgba(148, 170, 160, 0.46); }
+
+.wrap select {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  cursor: pointer !important;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2358e6a8'%3e%3cpath d='M7 10l5 5 5-5z'/%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 13px center !important;
+  background-size: 20px !important;
+}
+
+.wrap select:focus,
+.wrap input:focus {
+  border-color: var(--border-strong) !important;
+  box-shadow: 0 0 0 3px rgba(88, 230, 168, 0.09) !important;
+}
+
+.wrap option {
+  color: var(--text) !important;
+  background-color: var(--field) !important;
+}
+
+.wrap input[type='checkbox'] {
+  width: auto !important;
+  min-height: 0;
+  margin: 0 7px 0 0 !important;
+  accent-color: var(--primary);
+}
+
+.wrap input#pin {
+  text-align: center !important;
+  color: var(--primary) !important;
+  font-size: 21px !important;
+  font-weight: 750 !important;
+  letter-spacing: 6px !important;
+  border-color: rgba(88, 230, 168, 0.24) !important;
+}
+
+.wrap p {
+  color: var(--muted) !important;
+  font-size: 12px !important;
+}
+
+.wrap .connected-network {
+  margin: -12px 0 20px !important;
+  text-align: center !important;
+  color: var(--muted) !important;
+}
+
+.wrap .connected-network strong {
+  color: var(--text) !important;
+  font-weight: 750;
+}
+
+.wrap button,
+.wrap input[type='submit'] {
+  width: 100% !important;
+  min-height: 48px;
+  margin-top: 12px !important;
+  padding: 13px 16px !important;
+  color: var(--primary-dark) !important;
+  font-size: 15px !important;
+  font-weight: 800 !important;
+  border: none !important;
+  border-radius: 13px !important;
+  cursor: pointer !important;
+  background: var(--primary) !important;
+  box-shadow: none !important;
+}
+
+.wrap button:hover,
+.wrap input[type='submit']:hover {
+  filter: brightness(1.04);
+}
+
+.wrap button.secondary {
+  margin-top: 10px !important;
+  color: var(--muted) !important;
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+}
+
+.wrap button.secondary:hover {
+  color: var(--text) !important;
+  border-color: var(--border-strong) !important;
+}
+
+.wrap .secondary-button {
+  display: block !important;
+  width: 100% !important;
+  margin-top: 10px !important;
+  padding: 13px 16px !important;
+  color: var(--muted) !important;
+  font-size: 15px !important;
+  font-weight: 800 !important;
+  text-align: center !important;
+  text-decoration: none !important;
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 13px !important;
+}
+
+.wrap .secondary-button:hover {
+  color: var(--text) !important;
+  border-color: var(--border-strong) !important;
+}
+
+.wrap .msg {
+  margin: 16px 0 0 !important;
+  padding: 13px 14px !important;
+  color: var(--muted) !important;
+  font-size: 13px !important;
+  background: var(--field) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 13px !important;
+}
+
+.wrap a {
+  color: var(--primary) !important;
+  font-weight: 700 !important;
+  text-decoration: none !important;
+}
+
+.wrap hr {
+  margin: 16px 0 !important;
+  border: none !important;
+  border-top: 1px solid var(--border) !important;
+}
+
+@media (max-width: 430px) {
+  html,
+  body { padding: 16px 10px !important; }
+
+  .wrap {
+    padding: 24px 18px 20px !important;
+    border-radius: 20px !important;
+  }
+}

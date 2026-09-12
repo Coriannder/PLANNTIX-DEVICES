@@ -6,15 +6,18 @@
 #include <WiFiClientSecure.h>
 #include <WiFiClient.h>
 #include <WiFiManager.h>
+#include <ESP8266WebServer.h>
+#include <DNSServer.h>
 #include <DHT.h>
 #include <Firebase_ESP_Client.h>
 #include <EEPROM.h> 
 #include <RTClib.h>
 #include <sys/time.h>
+#include "portal_head.h" // Generado desde portal/portal.css en build (scripts/embed_portal.py)
 
 // Identidad de Firmware
 #define BOARD_TYPE "esp8266"
-#define FIRMWARE_VERSION "1.0.0"
+#define FIRMWARE_VERSION "1.1.0"
 
 #define DHTPIN D7       // Pin de datos del DHT22
 #define DHTTYPE DHT22   // Tipo de sensor
@@ -58,28 +61,9 @@ int lightOnMin = 0;
 int lightOffHour = 18;
 int lightOffMin = 0;
 
-// Estilos y UI Chlorophyll Glass para WiFiManager
-const char PLANNTIX_CUSTOM_HEAD[] = 
-"<style>"
-":root{--bg:#0c1324;--surface:#181f31;--surface-low:#141b2c;--border:#2e3447;--text:#dce2fa;--text-dim:#bbcabf;--primary:#4edea3;--primary-dark:#003824;--glow:rgba(78,222,163,0.25);}"
-"*{box-sizing:border-box;}"
-"html,body{background:radial-gradient(ellipse at top,#1c263d 0%,#0c1324 75%)!important;background-color:#0c1324!important;background-attachment:fixed!important;color:var(--text)!important;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif!important;margin:0;padding:20px;display:flex;justify-content:center;min-height:100vh;}"
-"div,.wrap,.c,form{background:transparent!important;border:none!important;box-shadow:none!important;max-width:380px!important;width:100%!important;margin:0 auto!important;}"
-"h1{color:#4edea3!important;font-size:24px!important;font-weight:800!important;letter-spacing:1.5px!important;text-align:center!important;margin:10px 0 2px 0!important;display:flex;align-items:center;justify-content:center;gap:8px;background:transparent!important;}"
-"h1::before{content:'🌱';font-size:22px;}"
-"h3{color:var(--text-dim)!important;font-size:13px!important;font-weight:400!important;text-align:center!important;margin:0 0 16px 0!important;background:transparent!important;}"
-"label{display:block!important;color:var(--text-dim)!important;font-size:13px!important;margin-bottom:6px!important;text-align:left!important;}"
-"input,select{width:100%!important;background-color:var(--surface-low)!important;border:1px solid var(--border)!important;color:var(--text)!important;padding:12px 14px!important;border-radius:10px!important;font-size:14px!important;outline:none!important;box-shadow:none!important;margin-bottom:14px!important;}"
-"select{-webkit-appearance:none!important;appearance:none!important;background-image:url(\"data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%234edea3'%3e%3cpath d='M7 10l5 5 5-5z'/%3e%3c/svg%3e\")!important;background-repeat:no-repeat!important;background-position:right 12px center!important;background-size:20px!important;cursor:pointer!important;}"
-"select:focus,input:focus{border-color:var(--primary)!important;box-shadow:0 0 10px var(--glow)!important;}"
-"option{background-color:#141b2c!important;color:#dce2fa!important;padding:8px!important;}"
-"input#pin{text-align:center!important;letter-spacing:6px!important;font-size:20px!important;font-weight:700!important;border-color:rgba(78,222,163,0.5)!important;background-color:var(--surface)!important;color:var(--primary)!important;}"
-"button,input[type='submit']{width:100%!important;background-color:var(--primary)!important;color:var(--primary-dark)!important;border:none!important;padding:13px!important;border-radius:10px!important;font-size:15px!important;font-weight:700!important;cursor:pointer!important;margin-top:10px!important;box-shadow:0 4px 12px var(--glow)!important;}"
-"button:hover,input[type='submit']:hover{filter:brightness(1.08);}"
-"</style>"
-"<script>"
-"if(location.pathname==='/'||location.pathname===''){location.replace('/wifi');}"
-"</script>";
+// Estilos y UI Chlorophyll Glass para WiFiManager.
+// El CSS vive en portal/portal.css y se embebe en src/portal_head.h durante el build.
+// Para previsualizar en el navegador: abrir portal/portal-preview.html
 
 // Variables para el sobremuestreo del sensor
 int consecutiveSensorFailures = 0;
@@ -98,8 +82,10 @@ struct SavedWiFi {
 };
 
 const int MAX_SAVED_WIFI = 3;
-const int EEPROM_WIFI_COUNT_ADDR = 99;
-const int EEPROM_WIFI_START_ADDR = 100;
+const int EEPROM_WIFI_COUNT_ADDR = 100;
+const int EEPROM_WIFI_START_ADDR = 101;
+const int EEPROM_OTA_FLAG_ADDR = 400;
+const int EEPROM_OTA_URL_ADDR = 401;
 
 void saveWiFiCredentials(String ssid, String pass) {
   if (ssid.length() == 0 || ssid.length() > 32 || pass.length() > 64) return;
@@ -159,7 +145,11 @@ void loadAndRegisterMultiWiFi() {
     SavedWiFi net;
     int addr = EEPROM_WIFI_START_ADDR + (i * sizeof(SavedWiFi));
     EEPROM.get(addr, net);
-    if (strlen(net.ssid) > 0) {
+    bool valid = (strlen(net.ssid) > 0 && strlen(net.ssid) <= 32);
+    for (size_t s = 0; s < strlen(net.ssid); s++) {
+      if ((unsigned char)net.ssid[s] < 32 || (unsigned char)net.ssid[s] > 126) valid = false;
+    }
+    if (valid) {
       wifiMulti.addAP(net.ssid, net.pass);
       Serial.printf("  -> Red %d: %s\n", i + 1, net.ssid);
     }
@@ -249,15 +239,15 @@ void performCloudOTA(String url, String targetVersion, String targetBoard) {
   Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/status", "updating");
   Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/ota/status", "downloading");
 
-  // Guardar flag OTA (1 = pendiente) en dirección 100
-  EEPROM.write(100, 1);
-  // Guardar URL hasta 200 caracteres en dir 101 a 300
+  // Guardar flag OTA (1 = pendiente) en dirección dedicada
+  EEPROM.write(EEPROM_OTA_FLAG_ADDR, 1);
+  // Guardar URL hasta 200 caracteres en dir dedicada
   int maxUrlLen = 200;
   for (int i = 0; i < maxUrlLen; i++) {
     if (i < (int)url.length()) {
-      EEPROM.write(101 + i, url[i]);
+      EEPROM.write(EEPROM_OTA_URL_ADDR + i, url[i]);
     } else {
-      EEPROM.write(101 + i, 0);
+      EEPROM.write(EEPROM_OTA_URL_ADDR + i, 0);
     }
   }
   EEPROM.commit();
@@ -269,14 +259,189 @@ void performCloudOTA(String url, String targetVersion, String targetBoard) {
 
 String otaBootErrorMessage = "";
 
+bool isValidPairingPin(String pin) {
+  if (pin.length() != 6) return false;
+  for (unsigned int i = 0; i < pin.length(); i++) {
+    if (!isdigit(pin[i])) return false;
+  }
+  return true;
+}
+
+String htmlEscape(String text) {
+  text.replace("&", "&amp;");
+  text.replace("<", "&lt;");
+  text.replace(">", "&gt;");
+  text.replace("\"", "&quot;");
+  text.replace("'", "&#39;");
+  return text;
+}
+
+String scanWifiOptions() {
+  String options = "";
+  int networks = WiFi.scanNetworks(false, true);
+  if (networks > 0) {
+    for (int i = 0; i < networks; i++) {
+      String ssid = WiFi.SSID(i);
+      if (ssid.length() == 0) continue;
+      String safeSsid = htmlEscape(ssid);
+      options += "<option value='" + safeSsid + "'>" + safeSsid + " (" + String(WiFi.RSSI(i)) + " dBm)</option>";
+    }
+  }
+  WiFi.scanDelete();
+  return options;
+}
+
+String buildPortalStart() {
+  String page = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+  page += "<meta name='viewport' content='width=device-width,initial-scale=1.0'>";
+  page += "<title>PLANNTIX</title>";
+  page += PLANNTIX_CUSTOM_HEAD;
+  page += "</head><body><div class='wrap'><h1>PLANNTIX</h1><h3>Vinculaci&oacute;n</h3>";
+  return page;
+}
+
+String buildPinPortalPage(String message = "") {
+  String page = buildPortalStart();
+  page += "<p class='connected-network'>Conectado a <strong>" + htmlEscape(WiFi.SSID()) + "</strong></p>";
+  page += "<form method='POST' action='/pin'>";
+  page += "<label for='pin'>PIN de Vinculaci&oacute;n</label>";
+  page += "<input id='pin' name='pin' maxlength='6' placeholder='123456' inputmode='numeric' pattern='[0-9]*'>";
+  page += "<p style='text-align:center;margin:-4px 0 16px 0;'>Ingresa el c&oacute;digo generado en tu App PLANNTIX</p>";
+  page += "<button type='submit'>Vincular</button></form>";
+  page += "<a class='secondary-button' href='/wifi'>Cambiar red WiFi</a>";
+  if (message.length() > 0) page += message;
+  page += "</div></body></html>";
+  return page;
+}
+
+String buildWifiPortalPage(String wifiOptions, String message = "") {
+  String page = buildPortalStart();
+  page += "<p class='connected-network'>Red actual <strong>" + htmlEscape(WiFi.SSID()) + "</strong></p>";
+  if (message.length() > 0) page += message;
+  page += "<form method='POST' action='/save-wifi'>";
+  page += "<label for='s'>Nueva red WiFi</label>";
+
+  if (wifiOptions.length() > 0) {
+    page += "<select id='s' name='s'>";
+    page += "<option value='' disabled selected>Seleccionar red...</option>";
+    page += wifiOptions;
+    page += "</select>";
+  } else {
+    page += "<input id='s' name='s' maxlength='32' placeholder='Nombre de la red'>";
+  }
+
+  page += "<label for='p'>Contrase&ntilde;a</label>";
+  page += "<input id='p' name='p' type='password' maxlength='64' placeholder='Contrase&ntilde;a de la red'>";
+  page += "<button type='submit'>Guardar red</button></form>";
+  page += "<form method='GET' action='/'><button class='secondary' type='submit'>Volver</button></form>";
+  page += "</div></body></html>";
+  return page;
+}
+
+int startPinOnlyPortal(String &providedPin) {
+  const IPAddress apIP(10, 0, 1, 1);
+  const IPAddress netMsk(255, 255, 255, 0);
+  DNSServer dnsServer;
+  ESP8266WebServer server(80);
+  bool pinReceived = false;
+  String errorMessage = "";
+
+  String wifiOptions = scanWifiOptions();
+
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAPConfig(apIP, apIP, netMsk);
+  if (!WiFi.softAP("PLANNTIX-Config")) {
+    Serial.println("[PIN-ONLY] No se pudo iniciar el AP del portal.");
+    return 0;
+  }
+
+  dnsServer.start(53, "*", apIP);
+
+  server.on("/", HTTP_GET, [&]() {
+    server.send(200, "text/html", buildPinPortalPage(errorMessage));
+  });
+
+  server.on("/pin", HTTP_POST, [&]() {
+    String pin = server.arg("pin");
+    if (isValidPairingPin(pin)) {
+      providedPin = pin;
+      pinReceived = true;
+      server.send(200, "text/html", buildPinPortalPage("<div class='msg S'>PIN recibido. Continuando vinculaci&oacute;n...</div>"));
+    } else {
+      errorMessage = "<div class='msg D'>El PIN debe tener exactamente 6 d&iacute;gitos.</div>";
+      server.send(200, "text/html", buildPinPortalPage(errorMessage));
+    }
+  });
+
+  server.on("/wifi", HTTP_GET, [&]() {
+    server.send(200, "text/html", buildWifiPortalPage(wifiOptions));
+  });
+
+  server.on("/change-wifi", HTTP_GET, [&]() {
+    server.send(200, "text/html", buildWifiPortalPage(wifiOptions));
+  });
+
+  server.on("/save-wifi", HTTP_POST, [&]() {
+    String ssid = server.arg("s");
+    String pass = server.arg("p");
+    if (ssid.length() == 0 || ssid.length() > 32 || pass.length() > 64) {
+      server.send(200, "text/html", buildWifiPortalPage(wifiOptions, "<div class='msg D'>Red o contrase&ntilde;a inv&aacute;lida.</div>"));
+      return;
+    }
+
+    Serial.printf("[PIN-ONLY] Intentando conectar a nueva red: %s\n", ssid.c_str());
+    WiFi.persistent(false); // No guardar credenciales del SDK si la prueba falla.
+    WiFi.begin(ssid.c_str(), pass.c_str());
+    unsigned long connectStart = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - connectStart < 15000) {
+      delay(250);
+      yield();
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      saveWiFiCredentials(ssid, pass);
+      errorMessage = "<div class='msg S'>Red guardada. Ahora ingres&aacute; el PIN.</div>";
+      server.send(200, "text/html", buildPinPortalPage(errorMessage));
+    } else {
+      WiFi.disconnect(false);
+      wifiMulti.run(8000);
+      errorMessage = "<div class='msg D'>No se pudo conectar. No se guard&oacute; la red.</div>";
+      server.send(200, "text/html", buildPinPortalPage(errorMessage));
+    }
+  });
+
+  server.onNotFound([&]() {
+    server.send(200, "text/html", buildPinPortalPage(errorMessage));
+  });
+
+  server.begin();
+  Serial.println("[PIN-ONLY] Portal iniciado en http://10.0.1.1 para ingresar PIN.");
+
+  unsigned long startTime = millis();
+  while (!pinReceived && millis() - startTime < 180000) {
+    dnsServer.processNextRequest();
+    server.handleClient();
+    delay(2);
+    yield();
+  }
+
+  if (pinReceived) delay(900);
+  server.stop();
+  dnsServer.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  if (pinReceived) return 1;
+  return 0;
+}
+
 void executePendingOTA() {
-  if (EEPROM.read(100) == 1) { // Hay un OTA pendiente
-    EEPROM.write(100, 0); // Limpiar flag para no ciclar
+  if (EEPROM.read(EEPROM_OTA_FLAG_ADDR) == 1) { // Hay un OTA pendiente
+    EEPROM.write(EEPROM_OTA_FLAG_ADDR, 0); // Limpiar flag para no ciclar
     EEPROM.commit();
 
     String url = "";
     for (int i = 0; i < 200; i++) {
-      char c = EEPROM.read(101 + i);
+      char c = EEPROM.read(EEPROM_OTA_URL_ADDR + i);
       if (c == 0) break;
       url += c;
     }
@@ -298,7 +463,7 @@ void executePendingOTA() {
     if (url.startsWith("https://")) {
       WiFiClientSecure client;
       client.setInsecure();
-      client.setBufferSizes(16384, 512);
+      client.setBufferSizes(5120, 512); // Buffer de 5 KB óptimo para Fastly/GitHub CDN
       client.setTimeout(60000);
       ret = ESPhttpUpdate.update(client, url);
     } else {
@@ -340,7 +505,7 @@ void setup() {
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW); // Apagado por defecto
   
-  EEPROM.begin(512);
+  EEPROM.begin(1024);
   dht.begin();
 
   // Inicializar RTC DS3231
@@ -353,10 +518,10 @@ void setup() {
     }
   }
 
-  // Obtener y formatear la dirección MAC (será el ID único)
+  // Obtener y formatear la dirección MAC (será el ID único coincidente con la web)
   deviceMac = WiFi.macAddress();
-  deviceMac.replace(":", "_");
-  deviceMac.toLowerCase();
+  deviceMac.replace(":", "");
+  deviceMac.toUpperCase();
   Serial.print("ID del dispositivo (MAC): ");
   Serial.println(deviceMac);
 
@@ -375,22 +540,38 @@ void setup() {
   // 1. Cargar redes guardadas en Multi-WiFi
   loadAndRegisterMultiWiFi();
 
-  // Si ya está vinculado, intentamos conexión automática con Multi-WiFi
+  // Intentamos conexión automática con Multi-WiFi si hay redes guardadas.
+  // Si no está vinculado pero ya tiene WiFi, mostramos solo el PIN.
   bool connectedViaMulti = false;
-  if (isLinked) {
-    Serial.print("Buscando redes Multi-WiFi guardadas (timeout 5s)... ");
-    uint8_t status = wifiMulti.run(5000);
-  
-    // ¡Apenas tenemos WiFi, comprobamos si hay un OTA pendiente con la RAM limpia!
-    executePendingOTA();
-  
-    if (status == WL_CONNECTED || WiFi.status() == WL_CONNECTED) {
-      connectedViaMulti = true;
-      Serial.printf("\n¡Conectado exitosamente a la mejor red: %s!\n", WiFi.SSID().c_str());
-    } else {
-      Serial.println("\nNinguna red guardada al alcance. Abriendo portal de configuración...");
+  Serial.print("Buscando redes Multi-WiFi guardadas (timeout 8s)... ");
+  uint8_t status = wifiMulti.run(8000);
+
+  if (status == WL_CONNECTED || WiFi.status() == WL_CONNECTED) {
+    connectedViaMulti = true;
+    Serial.printf("\n¡Conectado exitosamente a la mejor red: %s!\n", WiFi.SSID().c_str());
+    
+    if (isLinked) {
+      // ¡Apenas tenemos WiFi garantizado y la RAM limpia, ejecutamos la actualización OTA si está pendiente!
+      executePendingOTA();
+    }
+  } else {
+    Serial.println("\nNinguna red guardada al alcance.");
+    if (isLinked) {
+      Serial.println("Abriendo portal de configuración...");
       WiFi.disconnect();
       delay(100);
+    }
+  }
+
+  if (!isLinked && connectedViaMulti) {
+    Serial.println("Dispositivo con WiFi pero no vinculado. Abriendo portal solo para PIN...");
+    int pinPortalResult = startPinOnlyPortal(pairingPin);
+    if (pinPortalResult == 1) {
+      Serial.printf("PIN válido ingresado por el usuario: %s\n", pairingPin.c_str());
+    } else {
+      Serial.println("Timeout en el portal de PIN. Reiniciando...");
+      delay(3000);
+      ESP.restart();
     }
   }
 
@@ -398,8 +579,8 @@ void setup() {
   if (!connectedViaMulti) {
     WiFiManager wm;
     wm.setTitle("PLANNTIX");
-    wm.setClass("invert");
     wm.setCustomHeadElement(PLANNTIX_CUSTOM_HEAD);
+    wm.setAPStaticIPConfig(IPAddress(10, 0, 1, 1), IPAddress(10, 0, 1, 1), IPAddress(255, 255, 255, 0));
     wm.setCaptivePortalEnable(true);
     wm.setConfigPortalTimeout(180); // 3 minutos de tiempo de espera
 
@@ -440,10 +621,7 @@ void setup() {
 
     if (!isLinked) {
       String providedPin = custom_pin.getValue();
-      bool valid = (providedPin.length() == 6);
-      for (unsigned int i = 0; i < providedPin.length(); i++) {
-        if (!isdigit(providedPin[i])) valid = false;
-      }
+      bool valid = isValidPairingPin(providedPin);
 
       if (valid) {
         pairingPin = providedPin;
@@ -505,15 +683,41 @@ void setup() {
   String presencePath = "/telemetry/" + deviceMac + "/status";
   Firebase.RTDB.setString(&fbData, presencePath, "online");
   Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/info/version", FIRMWARE_VERSION);
+  Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/latest/version", FIRMWARE_VERSION);
   Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/info/board", BOARD_TYPE);
-  Firebase.RTDB.setBool(&fbData, "/telemetry/" + deviceMac + "/latest/isLightOn", digitalRead(RELAY_PIN) == HIGH);
+
+  float initHum = dht.readHumidity();
+  float initTemp = dht.readTemperature();
+  FirebaseJson initJson;
+  initJson.add("temperature", isnan(initTemp) ? 22.0 : initTemp);
+  initJson.add("humidity", isnan(initHum) ? 50.0 : initHum);
+  initJson.add("isLightOn", digitalRead(RELAY_PIN) == HIGH);
+  initJson.add("version", FIRMWARE_VERSION);
+  initJson.add("timestamp", (int)time(nullptr));
+  Firebase.RTDB.setJSON(&fbData, "/telemetry/" + deviceMac + "/latest", &initJson);
 
   if (otaBootErrorMessage.length() > 0) {
     Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/ota/status", "error: " + otaBootErrorMessage);
     otaBootErrorMessage = "";
+  } else {
+    Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/ota/status", "idle");
   }
 
   if (isLinked) {
+    // 3. Validar si el token local sigue activo en Firebase
+    String tokenPath = "/telemetry/" + deviceMac + "/config/secret_token";
+    if (Firebase.RTDB.getString(&fbData, tokenPath)) {
+      String remoteToken = fbData.stringData();
+      if (remoteToken.length() < 5 || remoteToken != deviceToken) {
+        Serial.println("\n[VALIDACIÓN] Token huérfano detectado: Esta placa no está registrada en Firebase.");
+        Serial.println("Borrando memoria interna y reiniciando en modo portal cautivo...");
+        delay(1000);
+        factoryReset();
+      } else {
+        Serial.println("Token de vinculación validado exitosamente con Firebase.");
+      }
+    }
+
     if (Firebase.RTDB.beginStream(&streamData, "/telemetry/" + deviceMac + "/config/light")) {
       Serial.println("Stream configurado exitosamente!");
       Firebase.RTDB.setStreamCallback(&streamData, streamCallback, streamTimeoutCallback);
@@ -533,29 +737,50 @@ void loop() {
     wifiMulti.run();
   }
 
-  // 0. VERIFICAR COMANDOS DE ACTUALIZACIÓN CLOUD OTA (Cada 15 segundos)
-  if (currentMillis - lastOtaCheckTime > 15000) {
+  // 0. VERIFICAR COMANDOS DE ACTUALIZACIÓN CLOUD OTA (Cada 5 segundos)
+  if (currentMillis - lastOtaCheckTime > 5000) {
     lastOtaCheckTime = currentMillis;
     String otaPath = "/telemetry/" + deviceMac + "/ota";
     if (Firebase.RTDB.getJSON(&fbData, otaPath)) {
       FirebaseJsonData jsonData;
       FirebaseJson &json = fbData.jsonObject();
-      
-      json.get(jsonData, "url");
-      if (jsonData.success && jsonData.stringValue.length() > 10) {
-        String otaUrl = jsonData.stringValue;
-        String otaVersion = "";
-        String otaBoard = "";
 
-        json.get(jsonData, "version");
-        if (jsonData.success) otaVersion = jsonData.stringValue;
+      String otaStatus = "";
+      json.get(jsonData, "status");
+      if (jsonData.success) otaStatus = jsonData.stringValue;
 
-        json.get(jsonData, "board");
-        if (jsonData.success) otaBoard = jsonData.stringValue;
+      // Solo iniciamos si la app web envió una orden en estado 'pending'
+      if (otaStatus == "pending") {
+        json.get(jsonData, "url");
+        if (jsonData.success && jsonData.stringValue.length() > 10) {
+          String otaUrl = jsonData.stringValue;
+          String otaVersion = "";
+          String otaBoard = "";
 
-        // Si la versión es distinta a la actual, ejecutamos la actualización
-        if (otaVersion != "" && otaVersion != FIRMWARE_VERSION) {
-          performCloudOTA(otaUrl, otaVersion, otaBoard);
+          json.get(jsonData, "version");
+          if (jsonData.success) otaVersion = jsonData.stringValue;
+
+          json.get(jsonData, "board");
+          if (jsonData.success) otaBoard = jsonData.stringValue;
+
+          // Si la versión es distinta a la actual, ejecutamos la actualización
+          if (otaVersion != "" && otaVersion != FIRMWARE_VERSION) {
+            performCloudOTA(otaUrl, otaVersion, otaBoard);
+          }
+        }
+      }
+    }
+
+    // 0.1 VERIFICAR ORDEN REMOTA DE DESVINCULACIÓN (Solo si está vinculado)
+    if (isLinked) {
+      String unlinkPath = "/telemetry/" + deviceMac + "/config/unlink";
+      if (Firebase.RTDB.getBool(&fbData, unlinkPath)) {
+        if (fbData.boolData() == true) {
+          Serial.println("\n[DESVINCULACIÓN REMOTA] Orden recibida desde la App Web.");
+          Serial.println("Borrando memoria y reiniciando en modo fábrica...");
+          Firebase.RTDB.deleteNode(&fbData, "/telemetry/" + deviceMac);
+          delay(500);
+          factoryReset();
         }
       }
     }
@@ -575,6 +800,20 @@ void loop() {
 
   // 2. LÓGICA DE APROVISIONAMIENTO Y CONTROL (NON-BLOCKING)
   if (!isLinked) {
+    static unsigned long unlinkedStartTime = 0;
+    if (unlinkedStartTime == 0) unlinkedStartTime = currentMillis;
+
+    // Timeout de 180 segundos (3 minutos) si el token no llega desde la web
+    if (currentMillis - unlinkedStartTime > 180000) {
+      Serial.println("\n[TIMEOUT VINCULACIÓN] No se recibió el token en 180 segundos.");
+      Serial.println("Limpiando registro huérfano y reiniciando en portal cautivo...");
+      if (pairingPin.length() == 6) {
+        Firebase.RTDB.deleteNode(&fbData, "/unlinked_devices/" + pairingPin);
+      }
+      delay(1000);
+      ESP.restart();
+    }
+
     // Si no está vinculado y tenemos PIN, anunciar MAC en Firebase
     if (!pinUploaded && pairingPin.length() == 6) {
       FirebaseJson pinJson;

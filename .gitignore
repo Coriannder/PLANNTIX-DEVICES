@@ -5,6 +5,9 @@
 .clang_complete
 .gcc-flags.json
 
+# Generado en build desde portal/portal.css
+src/portal_head.h
+
 # Arduino IDE
 build/
 bin/
