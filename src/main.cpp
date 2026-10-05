@@ -14,10 +14,11 @@
 #include <RTClib.h>
 #include <sys/time.h>
 #include "portal_head.h" // Generado desde portal/portal.css en build (scripts/embed_portal.py)
+#include "device_credentials.h" // Credenciales de la cuenta robot (NO commiteado)
 
 // Identidad de Firmware
 #define BOARD_TYPE "esp8266"
-#define FIRMWARE_VERSION "1.1.0"
+#define FIRMWARE_VERSION "1.2.0"
 
 #define DHTPIN D7       // Pin de datos del DHT22
 #define DHTTYPE DHT22   // Tipo de sensor
@@ -673,7 +674,9 @@ void setup() {
 
   // 2. Inicializar Firebase
   fbConfig.database_url = FIREBASE_HOST;
-  fbConfig.signer.test_mode = true;
+  fbConfig.api_key = FIREBASE_API_KEY;
+  fbAuth.user.email = DEVICE_AUTH_EMAIL;
+  fbAuth.user.password = DEVICE_AUTH_PASSWORD;
   
   Firebase.begin(&fbConfig, &fbAuth);
   Firebase.reconnectWiFi(true);
