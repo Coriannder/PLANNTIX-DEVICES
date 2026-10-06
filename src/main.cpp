@@ -34,7 +34,6 @@ RTC_DS3231 rtc;
 #define FIREBASE_HOST "plantix-9c6a4-default-rtdb.firebaseio.com"
 
 FirebaseData fbData;
-FirebaseData streamData;
 FirebaseConfig fbConfig;
 FirebaseAuth fbAuth;
 
@@ -215,13 +214,6 @@ void loadScheduleFromEEPROM() {
                 lightMode.c_str(), lightOnHour, lightOnMin, lightOffHour, lightOffMin);
 }
 
-void streamCallback(FirebaseStream data) {
-  forceConfigUpdate = true;
-}
-
-void streamTimeoutCallback(bool timeout) {
-  if (timeout) Serial.println("Stream timeout, reconectando...");
-}
 
 void performCloudOTA(String url, String targetVersion, String targetBoard) {
   if (targetBoard != "" && targetBoard != BOARD_TYPE) {
@@ -677,10 +669,14 @@ void setup() {
   fbConfig.api_key = FIREBASE_API_KEY;
   fbAuth.user.email = DEVICE_AUTH_EMAIL;
   fbAuth.user.password = DEVICE_AUTH_PASSWORD;
-  
+
+  // Reducir buffers BearSSL (default 16KB RX -> OOM/crash con auth en ESP8266)
+  fbData.setBSSLBufferSize(4096, 1024);
+  fbData.setResponseSize(4096);
+
   Firebase.begin(&fbConfig, &fbAuth);
   Firebase.reconnectWiFi(true);
-  Serial.println("Firebase inicializado.");
+  Serial.printf("Firebase inicializado. Heap libre: %u bytes\n", ESP.getFreeHeap());
   
   // Establecer estado inicial e info del firmware
   String presencePath = "/telemetry/" + deviceMac + "/status";
@@ -721,12 +717,8 @@ void setup() {
       }
     }
 
-    if (Firebase.RTDB.beginStream(&streamData, "/telemetry/" + deviceMac + "/config/light")) {
-      Serial.println("Stream configurado exitosamente!");
-      Firebase.RTDB.setStreamCallback(&streamData, streamCallback, streamTimeoutCallback);
-    } else {
-      Serial.printf("Error al iniciar stream: %s\n", streamData.errorReason().c_str());
-    }
+    // Sin stream persistente: una segunda sesión TLS simultánea no entra en el heap
+    // del ESP8266. El loop relee config/light cada 5s vía forceConfigUpdate.
   }
 }
 
@@ -743,6 +735,7 @@ void loop() {
   // 0. VERIFICAR COMANDOS DE ACTUALIZACIÓN CLOUD OTA (Cada 5 segundos)
   if (currentMillis - lastOtaCheckTime > 5000) {
     lastOtaCheckTime = currentMillis;
+    forceConfigUpdate = true; // Polling de config/light (reemplaza al stream removido por OOM)
     String otaPath = "/telemetry/" + deviceMac + "/ota";
     if (Firebase.RTDB.getJSON(&fbData, otaPath)) {
       FirebaseJsonData jsonData;
