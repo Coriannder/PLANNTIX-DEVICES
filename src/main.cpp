@@ -18,7 +18,7 @@
 
 // Identidad de Firmware
 #define BOARD_TYPE "esp8266"
-#define FIRMWARE_VERSION "1.2.0"
+#define FIRMWARE_VERSION "1.2.1"
 
 #define DHTPIN D7       // Pin de datos del DHT22
 #define DHTTYPE DHT22   // Tipo de sensor
@@ -45,6 +45,8 @@ String deviceToken = "";
 
 unsigned long lastSensorReadTime = 0;
 unsigned long lastHistoryUploadTime = 0;
+unsigned long lastFirebaseOk = 0;  // Última operación RTDB exitosa (watchdog)
+unsigned long wifiLostSince = 0;   // Desde cuándo no hay Wi-Fi (watchdog)
 unsigned long buttonPressStartTime = 0;
 bool isButtonPressed = false;
 volatile bool forceConfigUpdate = true;
@@ -720,6 +722,8 @@ void setup() {
     // Sin stream persistente: una segunda sesión TLS simultánea no entra en el heap
     // del ESP8266. El loop relee config/light cada 5s vía forceConfigUpdate.
   }
+
+  lastFirebaseOk = millis();
 }
 
 unsigned long lastOtaCheckTime = 0;
@@ -730,6 +734,24 @@ void loop() {
   // Mantener conexión Wi-Fi activa con Multi-WiFi si se pierde la señal
   if (WiFi.status() != WL_CONNECTED) {
     wifiMulti.run();
+    if (wifiLostSince == 0) {
+      wifiLostSince = currentMillis;
+    } else if (currentMillis - wifiLostSince > 300000) {
+      // Sin Wi-Fi por más de 5 minutos: reiniciar para reintentar limpio
+      Serial.println("[WATCHDOG] Wi-Fi caído hace >5 min. Reiniciando...");
+      delay(500);
+      ESP.restart();
+    }
+  } else {
+    wifiLostSince = 0;
+  }
+
+  // Watchdog Firebase: si una sesión TLS queda colgada, las operaciones RTDB
+  // dejan de completar. Sin éxito hace 5 min -> reinicio para autocurarse.
+  if (lastFirebaseOk > 0 && currentMillis - lastFirebaseOk > 300000) {
+    Serial.println("[WATCHDOG] Firebase sin respuesta hace >5 min. Reiniciando...");
+    delay(500);
+    ESP.restart();
   }
 
   // 0. VERIFICAR COMANDOS DE ACTUALIZACIÓN CLOUD OTA (Cada 5 segundos)
@@ -738,6 +760,7 @@ void loop() {
     forceConfigUpdate = true; // Polling de config/light (reemplaza al stream removido por OOM)
     String otaPath = "/telemetry/" + deviceMac + "/ota";
     if (Firebase.RTDB.getJSON(&fbData, otaPath)) {
+      lastFirebaseOk = currentMillis;
       FirebaseJsonData jsonData;
       FirebaseJson &json = fbData.jsonObject();
 
@@ -771,6 +794,7 @@ void loop() {
     if (isLinked) {
       String unlinkPath = "/telemetry/" + deviceMac + "/config/unlink";
       if (Firebase.RTDB.getBool(&fbData, unlinkPath)) {
+        lastFirebaseOk = currentMillis;
         if (fbData.boolData() == true) {
           Serial.println("\n[DESVINCULACIÓN REMOTA] Orden recibida desde la App Web.");
           Serial.println("Borrando memoria y reiniciando en modo fábrica...");
@@ -818,6 +842,7 @@ void loop() {
       String pinPath = "/unlinked_devices/" + pairingPin;
       
       if (Firebase.RTDB.setJSON(&fbData, pinPath, &pinJson)) {
+        lastFirebaseOk = currentMillis;
         pinUploaded = true;
         Serial.println("MAC subida a Firebase bajo el PIN ingresado.");
       } else {
@@ -833,6 +858,7 @@ void loop() {
       
       Serial.println("Esperando token de vinculación de Firebase...");
       if (Firebase.RTDB.getString(&fbData, tokenPath)) {
+        lastFirebaseOk = currentMillis;
         receivedToken = fbData.stringData();
         if (receivedToken.length() > 5) {
           if (receivedToken.length() >= MAX_TOKEN_LEN) {
@@ -860,6 +886,7 @@ void loop() {
       forceConfigUpdate = false;
       String configPath = "/telemetry/" + deviceMac + "/config/light";
       if (Firebase.RTDB.getJSON(&fbData, configPath)) {
+        lastFirebaseOk = currentMillis;
         FirebaseJsonData jsonData;
         FirebaseJson &json = fbData.jsonObject();
         
@@ -965,7 +992,9 @@ void loop() {
           targetRelayState = scheduledState;
           lightIsOn = scheduledState;
           // Actualizar Firebase para sincronizar la web
-          Firebase.RTDB.setBool(&fbData, "/telemetry/" + deviceMac + "/config/light/isOn", scheduledState);
+          if (Firebase.RTDB.setBool(&fbData, "/telemetry/" + deviceMac + "/config/light/isOn", scheduledState)) {
+            lastFirebaseOk = currentMillis;
+          }
           Serial.println("=> Override manual expirado (5m). Restableciendo ciclo automático.");
         } else {
           targetRelayState = overrideRelayState;
@@ -981,7 +1010,9 @@ void loop() {
     static bool lastRelayState = !currentRelayPhysicalState;
     if (currentRelayPhysicalState != lastRelayState) {
       lastRelayState = currentRelayPhysicalState;
-      Firebase.RTDB.setBool(&fbData, "/telemetry/" + deviceMac + "/latest/isLightOn", currentRelayPhysicalState);
+      if (Firebase.RTDB.setBool(&fbData, "/telemetry/" + deviceMac + "/latest/isLightOn", currentRelayPhysicalState)) {
+        lastFirebaseOk = currentMillis;
+      }
       Serial.printf("=> Cambio detectado! Notificando a Web: Relé -> %s\n", currentRelayPhysicalState ? "ON" : "OFF");
     }
 
@@ -1029,6 +1060,7 @@ void loop() {
         
         String path = "/telemetry/" + deviceMac + "/latest";
         if (Firebase.RTDB.setJSON(&fbData, path, &json)) {
+          lastFirebaseOk = currentMillis;
           Serial.println("¡Promedio subido de forma segura a Firebase!");
         } else {
           Serial.printf("Error al subir datos: %s\n", fbData.errorReason().c_str());
@@ -1039,6 +1071,7 @@ void loop() {
           lastHistoryUploadTime = currentMillis;
           String historyPath = "/telemetry/" + deviceMac + "/history";
           if (Firebase.RTDB.pushJSON(&fbData, historyPath, &json)) {
+            lastFirebaseOk = currentMillis;
             Serial.println("¡Punto de historial subido a Firebase!");
           } else {
             Serial.printf("Error al subir historial: %s\n", fbData.errorReason().c_str());
