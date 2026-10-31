@@ -18,7 +18,7 @@
 
 // Identidad de Firmware
 #define BOARD_TYPE "esp8266"
-#define FIRMWARE_VERSION "1.2.1"
+#define FIRMWARE_VERSION "0.1.0"
 
 #define DHTPIN D7       // Pin de datos del DHT22
 #define DHTTYPE DHT22   // Tipo de sensor
@@ -955,6 +955,10 @@ void loop() {
                 isOverrideActive = true;
                 overrideStartTime = millis();
                 overrideRelayState = newIsOn;
+                // Publicar fin del override para countdown exacto en la web
+                if (Firebase.RTDB.setInt(&fbData, "/telemetry/" + deviceMac + "/config/light/overrideUntil", (int)(time(nullptr) + 300))) {
+                  lastFirebaseOk = currentMillis;
+                }
                 Serial.printf("=> Override manual activado por 5 minutos: Relé -> %s\n", newIsOn ? "ON" : "OFF");
               } else {
                 isOverrideActive = false;
@@ -995,6 +999,7 @@ void loop() {
           if (Firebase.RTDB.setBool(&fbData, "/telemetry/" + deviceMac + "/config/light/isOn", scheduledState)) {
             lastFirebaseOk = currentMillis;
           }
+          Firebase.RTDB.setInt(&fbData, "/telemetry/" + deviceMac + "/config/light/overrideUntil", 0);
           Serial.println("=> Override manual expirado (5m). Restableciendo ciclo automático.");
         } else {
           targetRelayState = overrideRelayState;
