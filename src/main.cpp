@@ -18,7 +18,7 @@
 
 // Identidad de Firmware
 #define BOARD_TYPE "esp8266"
-#define FIRMWARE_VERSION "0.1.0"
+#define FIRMWARE_VERSION "0.0.1"
 
 #define DHTPIN D7       // Pin de datos del DHT22
 #define DHTTYPE DHT22   // Tipo de sensor
