@@ -119,6 +119,7 @@
                 "ESP8266",
                 "ARDUINO_ARCH_ESP8266",
                 "ARDUINO_ESP8266_NODEMCU_ESP12E",
+                "PIO_FRAMEWORK_ARDUINO_MMU_CACHE16_IRAM48_SEC_HEAP",
                 "F_CPU=80000000L",
                 "__ets__",
                 "ICACHE_FLASH",

@@ -18,7 +18,7 @@
 
 // Identidad de Firmware
 #define BOARD_TYPE "esp8266"
-#define FIRMWARE_VERSION "0.0.6"
+#define FIRMWARE_VERSION "0.0.1"
 
 #define DHTPIN D7       // Pin de datos del DHT22
 #define DHTTYPE DHT22   // Tipo de sensor
@@ -453,6 +453,14 @@ void executePendingOTA() {
     ESPhttpUpdate.setClientTimeout(60000);
     ESPhttpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     ESPhttpUpdate.rebootOnUpdate(true);
+    ESPhttpUpdate.onProgress([](int current, int total) {
+      static int lastStep = -1;
+      int step = current / 65536;
+      if (step != lastStep || current == total) {
+        lastStep = step;
+        Serial.printf("[OTA PROGRESO] %d/%d bytes; heap %u\n", current, total, ESP.getFreeHeap());
+      }
+    });
 
     t_httpUpdate_return ret;
     if (url.startsWith("https://")) {
@@ -461,6 +469,11 @@ void executePendingOTA() {
       client.setBufferSizes(4096, 512); // GitHub admite negociar fragmentos TLS de 4 KB (MFLN).
       client.setTimeout(60000);
       ret = ESPhttpUpdate.update(client, url);
+      if (ret == HTTP_UPDATE_FAILED) {
+        char sslError[128] = {};
+        int sslCode = client.getLastSSLError(sslError, sizeof(sslError));
+        Serial.printf("[OTA TLS] error=%d %s; heap=%u\n", sslCode, sslError, ESP.getFreeHeap());
+      }
     } else {
       WiFiClient client;
       client.setTimeout(30000);
