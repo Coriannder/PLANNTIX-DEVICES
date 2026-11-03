@@ -18,7 +18,7 @@
 
 // Identidad de Firmware
 #define BOARD_TYPE "esp8266"
-#define FIRMWARE_VERSION "0.0.4"
+#define FIRMWARE_VERSION "0.0.6"
 
 #define DHTPIN D7       // Pin de datos del DHT22
 #define DHTTYPE DHT22   // Tipo de sensor
@@ -458,7 +458,7 @@ void executePendingOTA() {
     if (url.startsWith("https://")) {
       WiFiClientSecure client;
       client.setInsecure();
-      client.setBufferSizes(16384, 512); // GitHub puede enviar registros TLS de hasta 16 KB.
+      client.setBufferSizes(4096, 512); // GitHub admite negociar fragmentos TLS de 4 KB (MFLN).
       client.setTimeout(60000);
       ret = ESPhttpUpdate.update(client, url);
     } else {
