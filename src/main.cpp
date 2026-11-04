@@ -18,7 +18,7 @@
 
 // Identidad de Firmware
 #define BOARD_TYPE "esp8266"
-#define FIRMWARE_VERSION "0.0.1"
+#define FIRMWARE_VERSION "0.0.2"
 
 #define DHTPIN D7       // Pin de datos del DHT22
 #define DHTTYPE DHT22   // Tipo de sensor
@@ -88,6 +88,14 @@ const int EEPROM_WIFI_COUNT_ADDR = 100;
 const int EEPROM_WIFI_START_ADDR = 101;
 const int EEPROM_OTA_FLAG_ADDR = 400;
 const int EEPROM_OTA_URL_ADDR = 401;
+const int EEPROM_BOOT_COUNT_ADDR = 650;
+const int EEPROM_BOOT_MAGIC_ADDR = 654;
+const uint32_t BOOT_MAGIC_VALUE = 0x504C414E; // "PLAN"
+
+uint32_t bootCount = 0;
+String bootResetReason = "";
+String bootResetInfo = "";
+unsigned long bootTimestamp = 0;
 
 void saveWiFiCredentials(String ssid, String pass) {
   if (ssid.length() == 0 || ssid.length() > 32 || pass.length() > 64) return;
@@ -506,6 +514,9 @@ void factoryReset() {
 }
 
 void setup() {
+  bootResetReason = ESP.getResetReason();
+  bootResetInfo = ESP.getResetInfo();
+
   Serial.begin(115200);
   Serial.println("\n--- Iniciando PLANNTIX-DEVICES (PRO) ---");
   
@@ -514,6 +525,23 @@ void setup() {
   digitalWrite(RELAY_PIN, LOW); // Apagado por defecto
   
   EEPROM.begin(1024);
+
+  // Gestión de contador de reinicios en EEPROM
+  uint32_t magic = 0;
+  EEPROM.get(EEPROM_BOOT_MAGIC_ADDR, magic);
+  if (magic != BOOT_MAGIC_VALUE) {
+    bootCount = 1;
+    EEPROM.put(EEPROM_BOOT_MAGIC_ADDR, BOOT_MAGIC_VALUE);
+    EEPROM.put(EEPROM_BOOT_COUNT_ADDR, bootCount);
+    EEPROM.commit();
+  } else {
+    EEPROM.get(EEPROM_BOOT_COUNT_ADDR, bootCount);
+    bootCount++;
+    EEPROM.put(EEPROM_BOOT_COUNT_ADDR, bootCount);
+    EEPROM.commit();
+  }
+  Serial.printf("[DIAG] Reinicio #%u | Causa: %s | Info: %s\n", bootCount, bootResetReason.c_str(), bootResetInfo.c_str());
+
   dht.begin();
 
   // Inicializar RTC DS3231
@@ -679,6 +707,8 @@ void setup() {
     Serial.println("RTC actualizado con la hora de internet (NTP).");
   }
 
+  bootTimestamp = time(nullptr);
+
   // 2. Inicializar Firebase
   fbConfig.database_url = FIREBASE_HOST;
   fbConfig.api_key = FIREBASE_API_KEY;
@@ -700,6 +730,16 @@ void setup() {
   Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/latest/version", FIRMWARE_VERSION);
   Firebase.RTDB.setString(&fbData, "/telemetry/" + deviceMac + "/info/board", BOARD_TYPE);
 
+  // Publicar diagnóstico de reinicio
+  FirebaseJson diagJson;
+  diagJson.add("bootCount", (int)bootCount);
+  diagJson.add("resetReason", bootResetReason);
+  diagJson.add("resetInfo", bootResetInfo);
+  diagJson.add("bootTimestamp", (int)bootTimestamp);
+  diagJson.add("freeHeap", (int)ESP.getFreeHeap());
+  diagJson.add("version", FIRMWARE_VERSION);
+  Firebase.RTDB.setJSON(&fbData, "/telemetry/" + deviceMac + "/diagnostics", &diagJson);
+
   float initHum = dht.readHumidity();
   float initTemp = dht.readTemperature();
   FirebaseJson initJson;
@@ -707,6 +747,9 @@ void setup() {
   initJson.add("humidity", isnan(initHum) ? 50.0 : initHum);
   initJson.add("isLightOn", digitalRead(RELAY_PIN) == HIGH);
   initJson.add("version", FIRMWARE_VERSION);
+  initJson.add("bootCount", (int)bootCount);
+  initJson.add("resetReason", bootResetReason);
+  initJson.add("uptime", 0);
   initJson.add("timestamp", (int)time(nullptr));
   Firebase.RTDB.setJSON(&fbData, "/telemetry/" + deviceMac + "/latest", &initJson);
 
@@ -1073,6 +1116,9 @@ void loop() {
         json.add("temperature", avgTemp);
         json.add("humidity", avgHum);
         json.add("isLightOn", digitalRead(RELAY_PIN) == HIGH);
+        json.add("bootCount", (int)bootCount);
+        json.add("resetReason", bootResetReason);
+        json.add("uptime", (int)(millis() / 1000));
         json.add("timestamp", (int)time(nullptr));
         // NOTA: No enviamos el deviceToken en texto plano aquí para no exponerlo en reposo.
         
